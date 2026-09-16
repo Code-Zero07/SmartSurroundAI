@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartSurround — Admin Login</title>
+  <style>
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 400px;
+           margin: 80px auto; padding: 0 20px; color: #1a1a1a; }
+    h1 { font-size: 1.3rem; margin-bottom: 4px; }
+    p { color: #555; font-size: 0.9rem; }
+    form { margin-top: 24px; }
+    label { font-size: 0.85rem; font-weight: 600; }
+    input[type=password] { width: 100%; padding: 10px; margin-top: 6px;
+      border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+    button { margin-top: 16px; width: 100%; padding: 11px; border: none;
+      border-radius: 6px; background: #2f9e44; color: white; font-weight: 600;
+      cursor: pointer; font-size: 1rem; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .flash { background: #fff3bf; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; }
+    .error { background: #f8d7da; border-left: 3px solid #c92a2a; padding: 10px 14px;
+      border-radius: 6px; margin-top: 16px; font-size: 0.9rem; }
+    .hint { font-size: 0.75rem; color: #777; margin-top: 18px; line-height: 1.5; }
+    a { color: #1971c2; }
+  </style>
+</head>
+<body>
+  <h1>SmartSurround</h1>
+  <p>Admin authentication required.</p>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <form id="login-form" method="post" action="/login/creds">
+    <label>PIN</label>
+    <input type="password" id="pin" name="pin" autocomplete="current-password"
+           minlength="4" required placeholder="Enter admin PIN">
+    <button type="submit" id="submit-btn">Log in</button>
+    <div class="error" id="form-error" hidden></div>
+  </form>
+
+  <p class="hint">
+    The PIN never travels in the URL — it is only sent via this POST body.
+    Too many wrong attempts will lock this IP for 1 hour.
+  </p>
+
+  <script src="/static/utils.js" defer></script>
+  <script>
+    (function () {
+      "use strict";
+      var form = document.getElementById("login-form");
+      var pin = document.getElementById("pin");
+      var btn = document.getElementById("submit-btn");
+      var err = document.getElementById("form-error");
+
+      if (!form) return;
+
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        err.hidden = true;
+        var value = pin.value.trim();
+        if (value.length < 4) {
+          err.textContent = "PIN must be at least 4 characters.";
+          err.hidden = false;
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = "Logging in…";
+
+        var fd = new FormData();
+        fd.append("pin", value);
+
+        fetch("/login/creds", { method: "POST", body: fd })
+          .then(function (resp) {
+            return resp.json().then(function (data) { return { status: resp.status, data: data }; });
+          })
+          .then(function (out) {
+            if (out.data.ok) {
+              try {
+                localStorage.setItem("ss_admin_pin", value);
+                if (!localStorage.getItem("ss_session_uid")) {
+                  localStorage.setItem("ss_session_uid", (SS && SS.uuidV7 ? SS.uuidV7() : Math.random().toString(36).slice(2)));
+                }
+              } catch (_) { /* storage full/blocked — token works regardless */ }
+              window.location.href = "/admin";
+              return;
+            }
+            btn.disabled = false;
+            btn.textContent = "Log in";
+            err.textContent = out.data.message || "Login failed.";
+            err.hidden = false;
+          })
+          .catch(function () {
+            btn.disabled = false;
+            btn.textContent = "Log in";
+            err.textContent = "Network error — check connection and retry.";
+            err.hidden = false;
+          });
+      });
+    })();
+  </script>
+</body>
+</html>

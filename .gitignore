@@ -1,0 +1,12 @@
+.env
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+uploads/
+letters/
+*.db
+.env.example
+# boot/upkeep logs
+_boot_*.log
+*.log

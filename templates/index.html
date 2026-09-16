@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartSurround — Road Damage Detection (Test Console)</title>
+  <style>
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 640px;
+           margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+    h1 { font-size: 1.4rem; }
+    .note { background: #eef7f0; border-left: 3px solid #2f9e44; padding: 10px 14px;
+            font-size: 0.9rem; margin-bottom: 24px; }
+    form { display: flex; flex-direction: column; gap: 12px; }
+    label { font-size: 0.85rem; font-weight: 600; }
+    input[type=text], input[type=file] { padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    button { padding: 10px 16px; border: none; border-radius: 6px; background: #2f9e44;
+             color: white; font-weight: 600; cursor: pointer; }
+    button[type=button] { background: #3b5bdb; }
+    .flash { background: #fff3bf; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; }
+    a.admin-link { display: inline-block; margin-top: 24px; }
+    #secure-banner { background: #fff3bf; border-left: 3px solid #e67700; padding: 10px 14px;
+                     font-size: 0.9rem; margin-bottom: 16px; }
+    #loc-status { font-size: 0.85rem; color: #555; margin-left: 8px; }
+    #camera-ui video, #camera-ui img { max-width: 100%; height: auto; background: #000;
+                                       border-radius: 6px; display: block; margin-bottom: 8px; }
+    #form-error { background: #f8d7da; border-left: 3px solid #c92a2a; padding: 10px 14px;
+                  font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>SmartSurround — Detection Test Console</h1>
+  <div class="note">
+    This form stands in for the ESP32-CAM firmware and the citizen-complaint
+    portal (both will POST to the same <code>/upload</code> endpoint). Upload
+    any road photo to push it through detection &rarr; the admin verification queue.
+  </div>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div id="secure-banner" hidden>
+    Camera and location require HTTPS — serve this over localhost or a TLS URL
+    (a LAN IP over plain http won't work).
+  </div>
+
+  <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
+    <div>
+      <label>Image</label><br>
+      <input type="file" id="file-anchor" name="image" accept="image/*" required>
+    </div>
+
+    <div id="photo-picker">
+      <button type="button" id="take-photo" hidden>Take Photo</button>
+      <button type="button" id="use-file" hidden>Use an existing photo instead</button>
+    </div>
+
+    <div id="camera-ui" hidden>
+      <video id="camera-preview" playsinline autoplay muted></video>
+      <canvas id="capture-canvas" hidden></canvas>
+      <img id="snapshot-img" alt="Captured photo" hidden>
+      <div>
+        <button type="button" id="capture-btn" disabled>Capture</button>
+        <button type="button" id="retake-btn" hidden>Retake</button>
+      </div>
+    </div>
+
+    <div>
+      <label>Source</label><br>
+      <select name="source">
+        <option value="citizen">Citizen submission</option>
+        <option value="esp32">ESP32-CAM post</option>
+      </select>
+    </div>
+    <div class="row">
+      <div>
+        <label>Latitude (optional)</label><br>
+        <input type="text" id="lat" name="lat" placeholder="22.5726">
+      </div>
+      <div>
+        <label>Longitude (optional)</label><br>
+        <input type="text" id="lon" name="lon" placeholder="88.3639">
+      </div>
+    </div>
+    <p id="loc-explainer" hidden>SmartSurround uses your location to tag this report accurately.</p>
+    <div>
+      <button type="button" id="loc-button" hidden>Use my location</button>
+      <span id="loc-status"></span>
+    </div>
+    <div>
+      <label>Description (optional, citizen note)</label><br>
+      <input type="text" name="description" placeholder="Large pothole near the bus stop">
+    </div>
+    <button type="submit" id="submit-btn">Run Detection</button>
+  </form>
+
+  <p id="form-error" hidden></p>
+
+  <a class="admin-link" href="/admin">Go to admin verification queue &rarr;</a>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

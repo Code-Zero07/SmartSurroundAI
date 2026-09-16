@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SmartSurround — Admin Verification Queue</title>
+  <style>
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 1000px;
+           margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 36px; border-bottom: 1px solid #eee; padding-bottom: 6px; }
+    .flash { background: #fff3bf; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; }
+    #toast { position: fixed; top: 16px; right: 16px; max-width: 320px; padding: 12px 16px;
+             border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18); font-size: 0.9rem;
+             display: none; z-index: 999; }
+    #toast.show { display: block; }
+    #toast.ok { background: #2f9e44; color: white; }
+    #toast.err { background: #e03131; color: white; }
+    #toast.warn { background: #f08c00; color: white; }
+    .card { display: flex; gap: 16px; border: 1px solid #e2e2e2; border-radius: 8px;
+            padding: 14px; margin-bottom: 12px; align-items: flex-start; }
+    .card img { width: 140px; height: 105px; object-fit: cover; border-radius: 6px; }
+    .meta { flex: 1; font-size: 0.9rem; line-height: 1.5; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem;
+             font-weight: 700; color: white; }
+    .Critical { background: #e03131; }
+    .Warning { background: #f08c00; }
+    .Normal { background: #2f9e44; }
+    .ai-accepted { background: #1971c2; }
+    .ai-uncertain { background: #868e96; }
+    .lifecycle { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.72rem;
+                 font-weight: 700; color: white; }
+    .lifecycle.open { background: #868e96; }
+    .lifecycle.corroborated { background: #f08c00; }
+    .lifecycle.emailed { background: #2f9e44; }
+    .lifecycle.settled { background: #495057; }
+    .auth-lifecycle { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.72rem;
+                      font-weight: 700; color: white; }
+    .auth-lifecycle.pending { background: #868e96; }
+    .auth-lifecycle.verified { background: #2f9e44; }
+    .auth-lifecycle.bounced { background: #e03131; }
+    .actions { display: flex; gap: 8px; flex-direction: column; }
+    button { padding: 8px 14px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .approve { background: #2f9e44; color: white; }
+    .reject { background: #e03131; color: white; }
+    .verify { background: #1971c2; color: white; }
+    .bounce { background: #e03131; color: white; }
+    .test-mail { background: #7048e8; color: white; }
+    .add-auth { background: #1971c2; color: white; }
+    .letter-link { font-size: 0.85rem; }
+    a { color: #1971c2; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { border: 1px solid #eee; padding: 8px 10px; text-align: left; }
+    th { background: #f8f9fa; font-weight: 600; }
+    .form-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 18px; }
+    .form-inline input, .form-inline select { padding: 7px 9px; border: 1px solid #ccc;
+      border-radius: 6px; }
+    .pin-gate { display: flex; gap: 8px; align-items: center; }
+    .pin-gate input { width: 120px; padding: 7px 9px; border: 1px solid #ccc; border-radius: 6px; }
+    code { background: #f1f3f5; padding: 1px 5px; border-radius: 4px; }
+    .mono { font-family: Consolas, monospace; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>Admin Verification Queue</h1>
+  <div id="toast" role="alert" aria-live="polite"></div>
+
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div class="pin-gate">
+    <input type="password" id="admin-pin" placeholder="Admin PIN" autocomplete="current-password">
+    <span id="auth-status" style="font-size:0.85rem;color:#555;">PIN required for protected actions</span>
+  </div>
+  <p style="font-size:0.75rem;color:#777;">
+    Protected actions (approve / reject / authority verify / test-email) need the PIN
+    and a valid login token. Your token lives in an httpOnly cookie — your browser
+    sends it automatically. The PIN is sent in the request body only, never the URL.
+  </p>
+
+  <h2>Pending ({{ pending|length }})</h2>
+  {% for d in pending %}
+    <div class="card">
+      <img src="/uploads/{{ d['image_path'].split('/')[-1] }}" alt="detection image">
+      <div class="meta">
+        <div><span class="badge {{ d['severity'] }}">{{ d['severity'] }}</span>
+             &nbsp;
+             {% if d['ai_accepted'] %}
+               <span class="badge ai-accepted">AI: confident</span>
+             {% else %}
+               <span class="badge ai-uncertain">AI: uncertain</span>
+             {% endif %}
+             &nbsp; <b>{{ d['damage_class'] }}</b> ({{ (d['confidence']*100)|round(1) }}%)</div>
+        <div>Source: {{ d['source'] }} &nbsp;|&nbsp; #{{ d['id'] }} &nbsp;|&nbsp; {{ d['created_at'][:19] }}</div>
+        {% if d['lat'] %}<div>GPS: {{ d['lat'] }}, {{ d['lon'] }}</div>{% endif %}
+        {% if d['description'] %}<div>Note: {{ d['description'] }}</div>{% endif %}
+      </div>
+      <div class="actions">
+        <button class="approve protected" data-action="approve" data-id="{{ d['id'] }}">Approve &amp; generate letter</button>
+        <button class="reject protected" data-action="reject" data-id="{{ d['id'] }}">Reject</button>
+      </div>
+    </div>
+  {% else %}
+    <p>Nothing pending.</p>
+  {% endfor %}
+
+  <h2>Approved ({{ approved|length }})</h2>
+  {% for d in approved %}
+    <div class="card">
+      <img src="/uploads/{{ d['image_path'].split('/')[-1] }}" alt="detection image">
+      <div class="meta">
+        <div><span class="badge {{ d['severity'] }}">{{ d['severity'] }}</span>
+             &nbsp; <b>{{ d['damage_class'] }}</b> — #{{ d['id'] }}</div>
+        <div class="letter-link"><a href="/letters/{{ d['id'] }}">Download letter PDF</a></div>
+      </div>
+    </div>
+  {% else %}
+    <p>None yet.</p>
+  {% endfor %}
+
+  <h2>Rejected ({{ rejected|length }})</h2>
+  {% for d in rejected %}
+    <div class="card">
+      <img src="/uploads/{{ d['image_path'].split('/')[-1] }}" alt="detection image">
+      <div class="meta">#{{ d['id'] }} — {{ d['damage_class'] }}</div>
+    </div>
+  {% else %}
+    <p>None yet.</p>
+  {% endfor %}
+
+  <div style="margin-top:18px;">
+    <button class="test-mail protected" data-action="test-email">Send test notification email (to EMAIL_TEST_RECIPIENT)</button>
+  </div>
+
+  <h2>Corroboration Clusters <span style="font-weight:400;font-size:0.8rem;">(polled live)</span></h2>
+  <div id="clusters-wrap"><p>Loading…</p></div>
+
+  <h2>Authorities</h2>
+  <div class="form-inline">
+    <input type="text" id="auth-area-key" placeholder="Coarse area key (e.g. 22.57:88.36)">
+    <select id="auth-hazard">
+      <option value="road_damage">road_damage</option>
+    </select>
+    <input type="text" id="auth-email" placeholder="authority@example.org">
+    <button class="add-auth protected" data-action="authority-add">Register authority</button>
+  </div>
+  <div id="authorities-wrap"><p>Loading…</p></div>
+
+  <p><a href="/">&larr; Back to test console</a></p>
+
+  <script src="/static/utils.js" defer></script>
+  <script>
+    (function () {
+      "use strict";
+
+      var pinInput = document.getElementById("admin-pin");
+      var clustersWrap = document.getElementById("clusters-wrap");
+      var authoritiesWrap = document.getElementById("authorities-wrap");
+
+      if (pinInput) {
+        try {
+          var saved = localStorage.getItem("ss_admin_pin");
+          if (saved) pinInput.value = saved;
+        } catch (_) { /* storage blocked — ask for the pin each action */ }
+      }
+
+      function pin() { return (pinInput && pinInput.value ? pinInput.value.trim() : ""); }
+
+      // -- transparent session bootstrap -------------------------------------
+      // The server protects every mutation with token+pin (httpOnly ss_token
+      // cookie + pin body field). That cookie only exists after a /login/creds
+      // exchange. If the operator lands on /admin directly (or the 30-minute
+      // cookie lapsed), the PIN alone is not enough — every protected call
+      // returns 401 "Authentication required." BEFORE the pin is checked.
+      // So: bootstrap the cookie silently from the PIN we already have, and
+      // re-trigger it once when a protected call comes back 401.
+      var _sessionBootstrapped = false;   // auto-once guard per page load
+      var _sessionInflight = null;        // de-dupe concurrent 401 retries
+      // force=true bypasses the auto-once guard: used when a protected action
+      // actually came back 401 so we re-mint the cookie from the fresh pin.
+      function apiEnsureSession(force) {
+        if (!force && _sessionBootstrapped) return Promise.resolve(null);
+        _sessionBootstrapped = true Comparable;
+        var v = pin();
+        if (!v) return Promise.resolve(null);
+        if (_sessionInflight) return _sessionInflight;
+        var fd = new FormData();
+        fd.append("pin", v);
+        _sessionInflight = fetch("/login/creds", {
+          method: "POST", body: fd, credentials: "same-origin"
+        }).then(function (r) {
+          var tok = r.headers.get("X-Set-Auth-Token");
+          if (tok) { try { localStorage.setItem("ss_admin_token", tok); } catch (_) {} }
+          return null;
+        }).catch(function () { return null; })
+        .then(function (r) { _sessionInflight = null; return r; });
+        return _sessionInflight;
+      }
+      function sessionToken() {
+        var best = "";
+        try { best = localStorage.getItem("ss_admin_token") || ""; } catch (_) {}
+        return best;
+      }
+
+      function toast(message, type) {
+        var t = document.getElementById("toast");
+        t.textContent = message;
+        t.className = "show " + (type || "warn");
+        clearTimeout(t._timer);
+        t._timer = setTimeout(function () { t.className = ""; }, 5000);
+      }
+
+      function apiPost(url, extra) {
+        // The cookie only exists after a /login/creds exchange. Bootstrap it
+        // transparently from the PIN we already have (auto-once per page load)
+        // before sending any protected mutation.
+        return apiEnsureSession().then(function () {
+          var fd = extra || new FormData();
+          if (pin()) fd.append("pin", pin());
+          return fetch(url, {
+            method: "POST",
+            body: fd,
+            credentials: "same-origin"
+          }).then(function (resp) {
+            return resp.json().then(function (data) { return { status: resp.status, data: data }; });
+          });
+        });
+      }
+
+      function handleProtected(url, message, extra, retried) {
+        if (!pin()) { toast("Enter the admin PIN first.", "warn"); return; }
+        apiPost(url, extra).then(function (out) {
+          // 401 here means the token lapsed (30-min cookie) even though the PIN
+          // is correct — the server checks the token BEFORE the pin. Re-mint
+          // the cookie from the PIN we have and retry this action ONCE. (A
+          // genuinely wrong PIN returns 403 "Wrong pin", never 401, so this
+          // can't loop.)
+          if (out.status === 401 && !retried) {
+            return apiEnsureSession(true).then(function () {
+              return handleProtected(url, message, extra, true);
+            });
+          }
+          if (out.data && out.data.ok) {
+            toast(out.data.message || message, "ok");
+            setTimeout(loadClusters, 400);   // refresh derived state after mutation
+          } else {
+            toast((out.data && out.data.message) || "Action failed.", "err");
+          }
+          return null;
+        }).catch(function () { toast("Network error.", "err"); });
+      }
+
+      function lifecycleBadge(lc) {
+        var label = lc || "open";
+        var cls = {open:"open", corroborated:"corroborated",
+                   emailed:"emailed", settled:"settled"}[label] || "open";
+        return '<span class="lifecycle ' + cls + '">' + label + "</span>";
+      }
+
+      function authBadge(lc) {
+        var label = lc || "pending";
+        var cls = {pending:"pending", verified:"verified",
+                   bounced:"bounced"}[label] || "pending";
+        return '<span class="auth-lifecycle ' + cls + '">' + label + "</span>";
+      }
+
+      function emailStatusBadge(row) {
+        if (row.lifecycle === "emailed") {
+          return ' <span class="lifecycle emailed">SENT ' +
+                 (row.emailed_at ? row.emailed_at.slice(0, 19).replace("T", " ") : "") + "</span>";
+        }
+        if (row.lifecycle === "corroborated") {
+          return ' <span class="lifecycle corroborated">ROUTED&nbsp;/&nbsp;QUEUED</span>';
+        }
+        return "";
+      }
+
+      function loadClusters() {
+        fetch("/admin/api/clusters", { credentials: "same-origin" })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data || !data.ok) { clustersWrap.innerHTML = "<p>Failed to load clusters.</p>"; return; }
+
+            var c = data.clusters || [];
+            var html = c.length
+              ? '<table><thead><tr><th>ID</th><th>Fine area</th><th>Hazard</th><th>Window start</th>' +
+                '<th>Lifecycle</th><th>Emailed</th><th>Letter</th></tr></thead><tbody>' +
+                c.map(function (row) {
+                  return "<tr><td>" + row.id + "</td><td class='mono'>" +
+                    (row.corroboration_area_key || "—") + "</td><td>" +
+                    (row.hazard_type || "—") + "</td><td class='mono'>" +
+                    (row.window_start || "—") + "</td><td>" +
+                    lifecycleBadge(row.lifecycle) + "</td><td>" +
+                    emailStatusBadge(row) + "</td><td>" +
+                    (row.letter_path ? "recorded" : "—") +
+                    "</td></tr>";
+                }).join("") + "</tbody></table>"
+              : "<p>No corroboration clusters yet.</p>";
+            clustersWrap.innerHTML = html;
+
+            var auth = data.authorities || [];
+            var ahtml = auth.length
+              ? '<table><thead><tr><th>ID</th><th>Coarse area</th><th>Hazard</th><th>Email</th>' +
+                '<th>Lifecycle</th><th>Actions</th></tr></thead><tbody>' +
+                auth.map(function (a) {
+                  return "<tr><td>" + a.id + "</td><td class='mono'>" +
+                    (a.authority_area_key || "—") + "</td><td>" +
+                    (a.hazard_type || "—") + "</td><td>" +
+                    (a.email || "—") + "</td><td>" + authBadge(a.lifecycle) + "</td><td>" +
+                    "<button class='verify protected' data-action='authority-verify' data-id='" + a.id + "'" +
+                    (a.lifecycle === "verified" ? " disabled" : "") + ">Verify</button> " +
+                    "<button class='bounce protected' data-action='authority-bounce' data-id='" + a.id + "'" +
+                    (a.lifecycle === "bounced" ? " disabled" : "") + ">Bounce</button>" +
+                    "</td></tr>";
+                }).join("") + "</tbody></table>"
+              : "<p>No authorities registered yet. Use the form above to add one.</p>";
+            authoritiesWrap.innerHTML = ahtml;
+          })
+          .catch(function () { clustersWrap.innerHTML = "<p>Poll error.</p>"; });
+      }
+
+      document.addEventListener("click", function (ev) {
+        var btn = ev.target.closest(".protected");
+        if (!btn || btn.disabled) return;
+
+        var action = btn.getAttribute("data-action");
+        var id = btn.getAttribute("data-id");
+
+        if (action === "approve")  handleProtected("/admin/approve/" + id, "Approved.");
+        else if (action === "reject") handleProtected("/admin/reject/" + id, "Rejected.");
+        else if (action === "authority-verify") handleProtected("/admin/authority/" + id + "/verify", "Authority verified.");
+        else if (action === "authority-bounce") handleProtected("/admin/authority/" + id + "/bounce", "Authority bounced.");
+        else if (action === "test-email") handleProtected("/admin/test-email", "Test email attempted.");
+        else if (action === "authority-add") {
+          var area = document.getElementById("auth-area-key").value.trim();
+          var hazard = document.getElementById("auth-hazard").value.trim();
+          var email = document.getElementById("auth-email").value.trim();
+          if (!area || !email) { toast("Area key and email are required.", "warn"); return; }
+          var fd = new FormData();
+          fd.append("authority_area_key", area);
+          fd.append("hazard_type", hazard);
+          fd.append("email", email);
+          handleProtected("/admin/authorities/add", "Authority registered.", fd);
+        }
+      });
+
+      document.addEventListener("DOMContentLoaded", function () {
+        loadClusters();
+        setInterval(loadClusters, 10000);   // poll derived state every 10 s
+      });
+    })();
+  </script>
+</body>
+</html>
