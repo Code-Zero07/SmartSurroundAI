@@ -183,7 +183,7 @@
       // actually came back 401 so we re-mint the cookie from the fresh pin.
       function apiEnsureSession(force) {
         if (!force && _sessionBootstrapped) return Promise.resolve(null);
-        _sessionBootstrapped = true Comparable;
+        _sessionBootstrapped = true;
         var v = pin();
         if (!v) return Promise.resolve(null);
         if (_sessionInflight) return _sessionInflight;

@@ -31,6 +31,7 @@ os.environ["ADMIN_PIN"] = "smart2026"
 os.environ["RESEND_API_KEY"] = ""
 os.environ["RESEND_FROM_EMAIL"] = ""
 os.environ["CORS_ORIGINS"] = "http://localhost:5000,http://127.0.0.1:5000"
+os.environ["AUTH_DISABLED"] = "0"   # keep the pin+token gate ON for these tests
 
 db.DB_PATH = os.path.join(_TMP, "test.db")
 

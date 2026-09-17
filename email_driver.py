@@ -54,11 +54,6 @@ SMTP_USE_TLS = os.environ.get("EMAIL_SMTP_USE_TLS", "true").strip().lower() in (
 SMTP_FROM = os.environ.get("EMAIL_FROM", "SmartSurround Authority Notices <noreply@smartsurround.local>")
 
 
-def _messy_creds():
-    """True when we must not attach a real driver (soft-fail to queue)."""
-    return EMAIL_MODE == "disabled" or _invalid_smtp()
-
-
 def _invalid_smtp():
     return not (SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
 

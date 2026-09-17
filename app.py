@@ -28,11 +28,16 @@ import time
 import uuid
 import secrets
 import logging
+from pathlib import Path
 from functools import wraps
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-load_dotenv()
+# Resolve .env NEXT TO app.py (not the process cwd). If we didn't, launching
+# from any other directory (debug reloader, scheduler, a second shell) would
+# silently skip .env, leaving AUTH_DISABLED / RESEND key / admin pin unset —
+# which woke the pin gate back up and made every protected admin call 401.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from flask import (
     Flask, request, render_template, redirect, url_for,
@@ -374,11 +379,10 @@ def upload():
         confidence=result["confidence"], severity=severity, lat=lat_f, lon=lon_f,
         description=description, ai_accepted=result["accepted"], client_ip=client_ip,
         hazard_type=hazard_type, corroboration_area_key=corroboration_area_key,
-        authority_area_key=authority_area_key,
+authority_area_key=authority_area_key,
     )
 
     emailed = corroboration.run_lifecycle_sweep()
-    authority_routing.route_pending_clusters()
 
     if emailed:
         flash(f"Detection #{new_id} ({damage_class}, {severity}) queued. "
@@ -471,7 +475,6 @@ def approve(detection_id):
     db.update_status(detection_id, "approved", letter_path=letter_path)
 
     emailed = corroboration.run_lifecycle_sweep()
-    authority_routing.route_pending_clusters()
 
     msg = f"Detection #{detection_id} approved \u2014 letter generated."
     if emailed:
