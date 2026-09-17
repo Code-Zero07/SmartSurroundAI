@@ -17,6 +17,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
 LETTERS_DIR = os.path.join(os.path.dirname(__file__), "letters")
+UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(LETTERS_DIR, exist_ok=True)
 
 # ---- Configure these for your actual deployment ----
@@ -25,6 +26,24 @@ AUTHORITY_ADDRESS = os.environ.get("AUTHORITY_ADDRESS", "[Authority address here
 SENDER_NAME = os.environ.get("SENDER_NAME", "SmartSurround Monitoring System")
 SENDER_CONTACT = os.environ.get("SENDER_CONTACT", "[Your contact email]")
 # -----------------------------------------------------
+
+
+def _resolve_image(detection):
+    """Locate the detection snapshot for the letter.
+
+    Rows store the image as a BARE basename (app.py + a one-time migration
+    normalize both / and \\ paths), so resolve it against UPLOADS_DIR. Legacy
+    rows that still carry a full absolute path are handled as-is."""
+    try:
+        raw = (detection["image_path"] or "").strip()
+    except (KeyError, IndexError):
+        raw = ""
+    if not raw:
+        return None
+    if os.path.isabs(raw) and os.path.exists(raw):
+        return raw
+    candidate = os.path.join(UPLOADS_DIR, os.path.basename(raw.replace("\\", "/")))
+    return candidate if os.path.exists(candidate) else None
 
 
 def generate_letter(detection) -> str:
@@ -79,10 +98,11 @@ def generate_letter(detection) -> str:
                                 styles["Normal"]))
         story.append(Spacer(1, 0.4 * cm))
 
-    if detection["image_path"] and os.path.exists(detection["image_path"]):
+    img_path = _resolve_image(detection)
+    if img_path:
         try:
             story.append(Spacer(1, 0.3 * cm))
-            story.append(RLImage(detection["image_path"], width=10 * cm, height=7.5 * cm))
+            story.append(RLImage(img_path, width=10 * cm, height=7.5 * cm))
         except Exception:
             pass
 
