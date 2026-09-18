@@ -1,9 +1,8 @@
-"""
-letter_generator.py
---------------------
-Builds a PDF letter to the road authority for a verified detection,
-using reportlab. Fill in AUTHORITY_NAME / AUTHORITY_ADDRESS / SENDER_INFO
-for your actual deployment, or load them from environment variables.
+"""letter_generator.py
+---------------------
+Builds a PDF letter to the authority for a hazard incident, using reportlab.
+Consumes the NORMALIZED incident fields (hazard_category / hazard_type / ...)
+so the same letter works for road damage, waterlogging, and future hazards.
 """
 
 import os
@@ -11,29 +10,34 @@ from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle
-)
+    SimpleDocTemplate, Paragraph, Spacer, Image as RLImage)
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
+
+import hazard_types
 
 LETTERS_DIR = os.path.join(os.path.dirname(__file__), "letters")
 UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(LETTERS_DIR, exist_ok=True)
 
-# ---- Configure these for your actual deployment ----
 AUTHORITY_NAME = os.environ.get("AUTHORITY_NAME", "Public Works Department")
 AUTHORITY_ADDRESS = os.environ.get("AUTHORITY_ADDRESS", "[Authority address here]")
 SENDER_NAME = os.environ.get("SENDER_NAME", "SmartSurround Monitoring System")
 SENDER_CONTACT = os.environ.get("SENDER_CONTACT", "[Your contact email]")
-# -----------------------------------------------------
+
+
+def humanize_label(value):
+    return hazard_types.humanize_label(value)
+
+
+def _val(detection, key, default=None):
+    try:
+        v = detection[key]
+        return default if v is None else v
+    except (KeyError, IndexError):
+        return default
 
 
 def _resolve_image(detection):
-    """Locate the detection snapshot for the letter.
-
-    Rows store the image as a BARE basename (app.py + a one-time migration
-    normalize both / and \\ paths), so resolve it against UPLOADS_DIR. Legacy
-    rows that still carry a full absolute path are handled as-is."""
     try:
         raw = (detection["image_path"] or "").strip()
     except (KeyError, IndexError):
@@ -47,55 +51,61 @@ def _resolve_image(detection):
 
 
 def generate_letter(detection) -> str:
-    """
-    detection: a sqlite3.Row (or dict-like) with keys:
-        id, image_path, damage_class, confidence, severity, lat, lon,
-        source, description, created_at
-    Returns the path to the generated PDF.
-    """
     filename = f"letter_detection_{detection['id']}.pdf"
     filepath = os.path.join(LETTERS_DIR, filename)
 
-    doc = SimpleDocTemplate(filepath, pagesize=A4,
-                             topMargin=2 * cm, bottomMargin=2 * cm,
-                             leftMargin=2 * cm, rightMargin=2 * cm)
+    doc = SimpleDocTemplate(filepath, pagesize=A4, pageCompression=0,
+                            topMargin=2 * cm, bottomMargin=2 * cm,
+                            leftMargin=2 * cm, rightMargin=2 * cm)
     styles = getSampleStyleSheet()
     story = []
 
     today = datetime.now().strftime("%d %B %Y")
 
+    hazard_category = _val(detection, "hazard_category", "road_damage")
+    hazard_label = humanize_label(hazard_category)
+    hazard_type = _val(detection, "hazard_type",
+                       _val(detection, "damage_class"))
+    hazard_type_label = humanize_label(hazard_type)
+    confidence = _val(detection, "confidence")
+    location_name = _val(detection, "location_name")
+
     story.append(Paragraph(f"Date: {today}", styles["Normal"]))
     story.append(Spacer(1, 0.5 * cm))
-    story.append(Paragraph(f"To,<br/>{AUTHORITY_NAME}<br/>{AUTHORITY_ADDRESS}", styles["Normal"]))
+    story.append(Paragraph(f"To,<br/>{AUTHORITY_NAME}<br/>{AUTHORITY_ADDRESS}",
+                           styles["Normal"]))
     story.append(Spacer(1, 0.8 * cm))
-    story.append(Paragraph("<b>Subject: Report of Damaged Road Condition Requiring Attention</b>",
-                            styles["Heading3"]))
+    story.append(Paragraph(
+        f"<b>Subject: Report of {hazard_label} Requiring Attention</b>",
+        styles["Heading3"]))
     story.append(Spacer(1, 0.4 * cm))
 
-    lat = detection["lat"] if detection["lat"] is not None else "N/A"
-    lon = detection["lon"] if detection["lon"] is not None else "N/A"
-    source_label = "an automated roadside monitoring post" if detection["source"] == "esp32" \
-        else "a citizen complaint submitted through the SmartSurround portal"
+    lat = _val(detection, "lat", "N/A")
+    lon = _val(detection, "lon", "N/A")
+    source_label = ("an automated roadside monitoring post"
+                    if _val(detection, "source") == "esp32"
+                    else "a citizen complaint submitted through the SmartSurround portal")
+    confidence_text = (f"{round(confidence * 100, 1)}%" if confidence is not None else "N/A")
 
     body = f"""
     Dear Sir/Madam,<br/><br/>
     This is an automated notice generated by the SmartSurround monitoring system,
     following manual verification by a system administrator.<br/><br/>
-    A road damage condition classified as <b>{detection['damage_class']}</b>
-    (severity: <b>{detection['severity']}</b>, detection confidence:
-    {round(detection['confidence'] * 100, 1) if detection['confidence'] is not None else 'N/A'}%)
-    was identified via {source_label} at the following GPS coordinates:<br/><br/>
+    A hazard classified as <b>{hazard_label}</b> (type: <b>{hazard_type_label}</b>,
+    detection confidence: {confidence_text}) was identified via {source_label}
+    at the following location:<br/><br/>
+    <b>Location:</b> {location_name or "N/A"}<br/>
     <b>Latitude:</b> {lat} &nbsp;&nbsp; <b>Longitude:</b> {lon}<br/><br/>
     A verified snapshot of the affected location is attached below for reference.
     We request that the relevant maintenance team assess and address this condition
-    at the earliest opportunity, particularly given the safety risk posed to
-    vehicles and pedestrians.<br/><br/>
+    at the earliest opportunity, particularly given the safety risk posed to the
+    public.<br/><br/>
     """
     story.append(Paragraph(body, styles["Normal"]))
 
-    if detection["description"]:
+    if _val(detection, "description"):
         story.append(Paragraph(f"<b>Reporter's note:</b> {detection['description']}",
-                                styles["Normal"]))
+                               styles["Normal"]))
         story.append(Spacer(1, 0.4 * cm))
 
     img_path = _resolve_image(detection)
@@ -107,7 +117,8 @@ def generate_letter(detection) -> str:
             pass
 
     story.append(Spacer(1, 0.8 * cm))
-    story.append(Paragraph(f"Regards,<br/>{SENDER_NAME}<br/>{SENDER_CONTACT}", styles["Normal"]))
+    story.append(Paragraph(f"Regards,<br/>{SENDER_NAME}<br/>{SENDER_CONTACT}",
+                           styles["Normal"]))
 
     doc.build(story)
     return filepath
