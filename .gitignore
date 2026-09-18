@@ -10,3 +10,6 @@ letters/
 # boot/upkeep logs
 _boot_*.log
 *.log
+
+# planning docs that were mistakenly committed
+docs/superpowers/
