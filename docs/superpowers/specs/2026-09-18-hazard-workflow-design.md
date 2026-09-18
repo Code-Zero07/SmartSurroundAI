@@ -21,7 +21,7 @@ Deliver an extensible hazard-reporting workflow around a **generic incident/dete
 2. **Detection model → normalized hazard result → generic incident/report.** No `if pothole:` in the workflow.
 3. **Clustering = organization; admin approval = authorization to send; citizen submission ≠ email.**
 4. **One valid report can form a cluster.** Representative = highest-confidence eligible report → **one** authority email.
-5. **Terminal clusters never reopen:** an approved/sent or settled cluster is terminal and never auto-reopened; new same-area reports start a new cluster generation.
+5. **Terminal clusters never reopen:** a `sent` or `settled` cluster is terminal and never auto-reopened; at most one active cluster exists per (fine area, hazard category), and new same-area reports start a new cluster generation once the previous one is terminal.
 
 ## 4. Architecture overview
 
@@ -93,7 +93,9 @@ Draft immutability: once created, the draft's detection/coords/category are serv
 - `status` values extended with `draft`. Report lifecycle: `draft → pending → approved/rejected` (rejected reports never become representatives).
 
 **`corroboration_clusters` (repurposed → admin cluster table; table rebuild — 2 legacy rows):**
-- Grouping key moves to `(corroboration_area_key, hazard_category)`; the UNIQUE constraint is **relaxed** to allow multiple rows per key (generations).
+- Grouping key is `(corroboration_area_key, hazard_category)`. There is **no global UNIQUE constraint** on this pair — historical cluster generations may share the same area + hazard.
+- **One-active-cluster invariant:** at most one cluster may be *active* per `(corroboration_area_key, hazard_category)` at a time, where active = `lifecycle IN (pending_approval, approved, missing_authority_email)`. Enforced with a **partial unique index** (`CREATE UNIQUE INDEX ... ON corroboration_clusters(corroboration_area_key, hazard_category) WHERE lifecycle IN ('pending_approval','approved','missing_authority_email')` — supported by the bundled SQLite), with the application joining an existing active cluster transactionally and re-joining on the rare creation race. This replaces the old global UNIQUE on `(corroboration_area_key, hazard_type, window_start)`.
+- `sent` and `settled` are terminal and therefore **excluded from the active index** — a historical sent/settled cluster never blocks a new generation for the same area + hazard.
 - Adds `representative_report_id INTEGER`, `authority_area_key TEXT`, `updated_at TEXT`; drops `window_start`.
 - `lifecycle` reused (no competing status system) with **cluster lifecycle**: `pending_approval → approved → sent`; exceptions: `missing_authority_email`, terminal `settled`.
 
@@ -105,7 +107,7 @@ Draft immutability: once created, the draft's detection/coords/category are serv
 
 - Removed: `CORROBORATION_THRESHOLD`, windows, derived counts, `offending_clusters`, auto-send sweep. Retained: `fine_area_key` (~111m), `coarse_area_key` (~1.1km).
 - A report joins the **active** cluster (`lifecycle IN pending_approval/approved/missing_authority_email`) for `(fine key, hazard_category)`; else creates a new `pending_approval` cluster.
-- **Never reopened after `sent`/`settled`:** new same-area/hazard reports start a new cluster generation (only one active per key enforced in code). A later send is a new cluster id → a new email, not a duplicate.
+- **Never reopened after `sent`/`settled`:** a `sent`/`settled` cluster is terminal and does **not** block a new generation — a later same-area/hazard report starts a fresh cluster. A later send is a new cluster id → a new email, not a duplicate. The one-active-cluster invariant is enforced by the partial unique index (see §8), with transactional join + re-join on a creation race.
 - **Representative:** highest-confidence report with `status IN (pending, approved)` in cluster. Recompute on (a) join, (b) member status change via per-report approve/reject; a freshly rejected representative is replaced by the next-highest eligible report.
 - Cluster `authority_area_key` refreshes from the representative's **stored coords** at recompute time (routing never uses `location_name`).
 - `POST /upload` (ESP32/direct) updated: inserts `pending` report with full generic fields, runs clustering, **no email**.
