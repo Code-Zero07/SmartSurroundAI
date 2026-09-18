@@ -684,13 +684,9 @@ def approve(detection_id):
 
     letter_path = letter_generator.generate_letter(detection)
     db.update_status(detection_id, "approved", letter_path=letter_path)
-
-    emailed = corroboration.run_lifecycle_sweep()
-
-    msg = f"Detection #{detection_id} approved \u2014 letter generated."
-    if emailed:
-        msg += f" Auto-emailed {emailed} corroborated cluster(s)."
-    return jsonify({"ok": True, "message": msg})
+    corroboration.recompute_for_report(detection_id)
+    return jsonify({"ok": True,
+                    "message": f"Detection #{detection_id} approved \u2014 letter generated."})
 
 @app.route("/admin/reject/<int:detection_id>", methods=["POST"])
 @require_auth
@@ -699,6 +695,7 @@ def reject(detection_id):
     if detection is None:
         return jsonify({"ok": False, "message": "Detection not found."}), 404
     db.update_status(detection_id, "rejected")
+    corroboration.recompute_for_report(detection_id)
     return jsonify({"ok": True, "message": f"Detection #{detection_id} rejected."})
 
 @app.route("/admin/authority/<int:authority_id>/verify", methods=["POST"])
@@ -743,6 +740,37 @@ def test_email():
     )
     return jsonify({"ok": result.get("ok"), "reason": result.get("reason"),
                     "mode": result.get("mode"), "to": result.get("effective_recipient")})
+
+def _cluster_result(result):
+    ok = result.get("ok", False)
+    message = result.get("message", "")
+    status = 200 if ok else (404 if message.startswith("Cluster not found") else 400)
+    return jsonify(result), status
+
+@app.route("/admin/cluster/<int:cluster_id>/approve", methods=["POST"])
+@require_auth
+def admin_cluster_approve(cluster_id):
+    result = cluster_service.approve_and_maybe_send(cluster_id)
+    return _cluster_result(result)
+
+@app.route("/admin/cluster/<int:cluster_id>/send", methods=["POST"])
+@require_auth
+def admin_cluster_send(cluster_id):
+    result = cluster_service.send_cluster_email(cluster_id)
+    return _cluster_result(result)
+
+@app.route("/admin/cluster/<int:cluster_id>/settle", methods=["POST"])
+@require_auth
+def admin_cluster_settle(cluster_id):
+    result = cluster_service.settle_cluster(cluster_id)
+    return _cluster_result(result)
+
+@app.route("/admin/cluster/<int:cluster_id>/authority-email", methods=["POST"])
+@require_auth
+def admin_cluster_authority_email(cluster_id):
+    email = (request.form.get("email") or "").strip()
+    result = cluster_service.provide_authority_email(cluster_id, email)
+    return _cluster_result(result)
 
 # ---------------------------------------------------------------------------
 # Static: letters, uploads
