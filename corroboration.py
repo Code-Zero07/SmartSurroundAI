@@ -1,189 +1,201 @@
-"""
-corroboration.py
-----------------
-Track B count-free corroboration engine.
+"""corroboration.py
+-------------------
+Geographical clustering for ADMIN ORGANIZATION.
 
-Every count is DERIVED at read time:
-    COUNT(DISTINCT detections.client_ip)
-per fine grid cell + hazard + time window — there is NO stored counter, no
-stored count column anywhere flags. The area keys themselves are DERIVED
-(not stored in a way that Track A needs to know about) from each row's
-lat/lon at insert time.
+This is NOT corroboration and NOT a send authorization:
+  - clustering groups nearby reports for the admin to review;
+  - admin approval (cluster_service.py) is the ONLY send trigger;
+  - a single valid report can form its own cluster.
 
-Grid model (both keys derived from lat/lon, env-configurable precision):
-- FINE key   "corroboration_area_key":  ~111 m cells (=> localised, single
-  road/pavement cluster). Used to group citizen reports that are effectively
-  the same stretch of damage.
-- COARSE key "authority_area_key":     ~1.1 km cells (=> correlates to the
-  authority that owns that jurisdiction). ONE per citizen report; used to
-  route to the authority owning that ~1 km territory.
+Grid model (kept from the old Track B design):
+  - FINE key   (~111 m cells): cluster grouping unit.
+  - COARSE key (~1.1 km cells): belongs to ONE authority territory; used for
+    authority routing (coarse key + hazard_category).
 
-Windows: fixed windows (UTC) of envconfigurable length (default 2 h). A
-cluster is "mature/resolvable" once window_start + window_len has elapsed;
-only matured windows are ever escalated to corroborated -> letter -> email.
+Cluster generations: at most one ACTIVE cluster per (fine key, hazard_category)
+is enforced by the partial unique index in db.py (see CLUSTER_ACTIVE_LIFECYCLES).
+`sent`/`settled` clusters are terminal: a later same-area report starts a NEW
+generation instead of reopening the old one.
 """
 
-import math
 import os
-import time
+import sqlite3
 from datetime import datetime, timezone, timedelta
 
 import db
 
 # --- config surfaces (env, all optional, with safe defaults) -----------------
-FINE_DECIMALS = int(os.environ.get("CORROBORATION_FINE_DECIMALS", "3"))    # ~111 m
+FINE_DECIMALS = int(os.environ.get("CORROBORATION_FINE_DECIMALS", "3"))      # ~111 m
 COARSE_DECIMALS = int(os.environ.get("CORROBORATION_COARSE_DECIMALS", "2"))  # ~1.1 km
-WINDOW_SECONDS = int(os.environ.get("CORROBORATION_WINDOW_SECONDS", str(2 * 3600)))
-CORROBORATION_THRESHOLD = int(os.environ.get("CORROBORATION_THRESHOLD", "3"))
-HAZARD_TYPE = os.environ.get("CORROBORATION_HAZARD_TYPE", "road_damage")
+DRAFT_TTL_HOURS = int(os.environ.get("DRAFT_TTL_HOURS", "24"))
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+ACTIVE_LIFECYCLES = db.CLUSTER_ACTIVE_LIFECYCLES
+ELIGIBLE_REPORT_STATUSES = ("pending", "approved")
 
 
 def _round_cell(value, decimals):
-    """Round a lat/lon to a fixed cell precision (deterministic cell key)."""
     return round(value, decimals)
 
 
 def fine_area_key(lat, lon):
-    """~111 m cell key. None when lat/lon missing (nothing corroborates then)."""
     if lat is None or lon is None:
         return None
     return f"{_round_cell(lat, FINE_DECIMALS)}:{_round_cell(lon, FINE_DECIMALS)}"
 
 
 def coarse_area_key(lat, lon):
-    """~1.1 km cell key -> correlates to the owning authority's territory."""
     if lat is None or lon is None:
         return None
     return f"{_round_cell(lat, COARSE_DECIMALS)}:{_round_cell(lon, COARSE_DECIMALS)}"
 
 
-def window_start_of(dt):
-    """Floor dt to the corroboration window (UTC)."""
-    ts = int(dt.timestamp())
-    start = ts - (ts % WINDOW_SECONDS)
-    return datetime.fromtimestamp(start, tz=timezone.utc)
+# ---------------------------------------------------------------------------
+# Cluster membership
+# ---------------------------------------------------------------------------
+
+def assign_report_to_cluster(report_id, fine_key, hazard_category,
+                             authority_area_key=None):
+    """Join a report to the ACTIVE (fine key, hazard_category) cluster, or
+    create a new generation. One-active-cluster is enforced by the partial
+    unique index; a creation race is resolved by re-joining the winner."""
+    cluster = db.get_active_cluster(fine_key, hazard_category)
+    if cluster is None:
+        try:
+            cluster = db.create_cluster(
+                fine_key, hazard_category, authority_area_key=authority_area_key)
+        except sqlite3.IntegrityError:
+            cluster = db.get_active_cluster(fine_key, hazard_category)
+            if cluster is None:
+                raise
+    db.set_report_cluster(report_id, cluster["id"])
+    recompute_representative(cluster["id"])
+    return cluster["id"]
 
 
-def window_end_of(window_start):
-    return window_start + timedelta(seconds=WINDOW_SECONDS)
+# ---------------------------------------------------------------------------
+# Representative evidence (highest-confidence VALID report)
+# ---------------------------------------------------------------------------
+
+def recompute_representative(cluster_id):
+    """Highest-confidence report with status IN (pending, approved) becomes the
+    representative; refresh the cluster's authority_area_key from its coords."""
+    cluster = db.get_cluster(cluster_id)
+    if cluster is None:
+        return None
+    conn = db.get_conn()
+    row = conn.execute(
+        """
+        SELECT * FROM detections
+        WHERE cluster_id = ?
+          AND status IN ('pending', 'approved')
+        ORDER BY (confidence IS NULL) ASC, confidence DESC, id ASC
+        LIMIT 1
+        """,
+        (cluster_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        db.update_cluster(cluster_id, representative_report_id=None,
+                          authority_area_key=None)
+        return None
+    db.update_cluster(cluster_id,
+                      representative_report_id=row["id"],
+                      authority_area_key=row["authority_area_key"])
+    return row["id"]
 
 
-def window_matured(window_start):
-    """A window is only actionable after it has fully elapsed."""
-    return datetime.now(timezone.utc) >= window_end_of(window_start)
+def recompute_for_report(report_id):
+    """After a report joins or its review status changes, refresh the
+    representative of its cluster."""
+    report = db.get_detection(report_id)
+    if report is None or report["cluster_id"] is None:
+        return None
+    return recompute_representative(report["cluster_id"])
 
 
-def cluster_rows(fine_key, hazard_type, window_start):
-    """All citizen reports (server-captured client_ip set) that fall in the
-    fine cell + hazard + window. The corroboration count is DERIVED per call:
-        COUNT(DISTINCT client_ip) on this result set.
-    """
+def reports_in_cluster(cluster_id):
     conn = db.get_conn()
     rows = conn.execute(
         """
-        SELECT client_ip, created_at
-        FROM detections
-        WHERE corroboration_area_key = ?
-          AND hazard_type = ?
-          AND status IN ('pending', 'approved')
-          AND created_at >= ? AND created_at < ?
+        SELECT * FROM detections
+        WHERE cluster_id = ?
+        ORDER BY (confidence IS NULL) ASC, confidence DESC, id ASC
         """,
-        (fine_key, hazard_type, window_start.isoformat(), window_end_of(window_start).isoformat()),
+        (cluster_id,),
     ).fetchall()
     conn.close()
     return rows
 
 
-def corroboration_count(fine_key, hazard_type, window_start):
-    """ALWAYS derived: COUNT(DISTINCT client_ip) over the cluster rows.
-    Never read from a stored counter."""
-    rows = [r for r in cluster_rows(fine_key, hazard_type, window_start) if r["client_ip"]]
-    return len({r["client_ip"] for r in rows})
+# ---------------------------------------------------------------------------
+# Admin payload + draft hygiene
+# ---------------------------------------------------------------------------
 
-
-def cluster_lifecycle(fine_key, hazard_type, window_start):
-    """Derive the cluster's corroboration lifecycle on demand:
-    open / corroborated / emailed / settled. Purely a function of the
-    derived count, the elapsed window and the corroboration_clusters row."""
-    row = db.get_cluster(fine_key, hazard_type, window_start)
-    count = corroboration_count(fine_key, hazard_type, window_start)
+def _report_dict(row):
     if row is None:
-        if count >= CORROBORATION_THRESHOLD and window_matured(window_start):
-            db.put_cluster(fine_key, hazard_type, window_start)
-            return cluster_lifecycle(fine_key, hazard_type, window_start)
-        return "open"
-
-    lifecycle = row["lifecycle"]
-    # counts always truth; re-derive (no stored counter to trust)
-    if count >= CORROBORATION_THRESHOLD and window_matured(window_start):
-        if lifecycle in ("open", "corroborated"):
-            return "corroborated"
-    if lifecycle == "emailed":
-        return "emailed"
-    if lifecycle in ("settled", "corroborated", "emailed") and count < CORROBORATION_THRESHOLD:
-        # never crosses back automatically; state machine owns resets
-        return "settled"
-    return lifecycle
-
-
-def offending_clusters():
-    """Clusters with a matured window + corroborated count that still need an
-    authority notification (derived count over maturity). Returns fine keys
-    whose derived count crossed CORROBORATION_THRESHOLD in an elapsed window."""
-    conn = db.get_conn()
-    rows = conn.execute(
-        """
-        SELECT corroboration_area_key AS fine_key, hazard_type,
-               window_start
-        FROM detections
-        """,
-    ).fetchall()
-    conn.close()
-
-    seen = set()
-    offenders = []
-    for row in rows:
-        key = (row["fine_key"], row["hazard_type"], row["window_start"])
-        if key in seen or row["fine_key"] is None:
-            continue
-        seen.add(key)
-        ws = datetime.fromisoformat(row["window_start"])
-        if window_matured(ws):
-            count = corroboration_count(*key)
-            if count >= CORROBORATION_THRESHOLD:
-                offenders.append(row)
-    return offenders
+        return None
+    image_url = None
+    if row["image_path"]:
+        image_url = f"/uploads/{os.path.basename(row['image_path'])}"
+    return {
+        "id": row["id"],
+        "status": row["status"],
+        "image_url": image_url,
+        "hazard_category": row["hazard_category"],
+        "hazard_type": row["hazard_type"],
+        "confidence": row["confidence"],
+        "location_name": row["location_name"],
+        "lat": row["lat"],
+        "lon": row["lon"],
+        "source": row["source"],
+        "created_at": row["created_at"],
+    }
 
 
-def fine_key_from_row(detection_row):
-    """Derive the fine corroboration key directly from a stored detection row's
-    lat/lon (rows keep lat/lon, we never persist a redundant key on Track A)."""
-    return fine_area_key(detection_row["lat"], detection_row["lon"])
+def clusters_for_admin():
+    out = []
+    for c in db.list_clusters_for_admin():
+        reports = reports_in_cluster(c["id"])
+        rep = None
+        if c["representative_report_id"]:
+            rep = db.get_detection(c["representative_report_id"])
+        out.append({
+            "id": c["id"],
+            "corroboration_area_key": c["corroboration_area_key"],
+            "hazard_category": c["hazard_category"],
+            "lifecycle": c["lifecycle"],
+            "letter_path": c["letter_path"],
+            "sent_at": c["sent_at"],
+            "last_send_error": c["last_send_error"],
+            "representative_report_id": c["representative_report_id"],
+            "authority_area_key": c["authority_area_key"],
+            "created_at": c["created_at"],
+            "updated_at": c["updated_at"],
+            "report_count": sum(1 for r in reports
+                                if r["status"] in ELIGIBLE_REPORT_STATUSES),
+            "representative": _report_dict(rep),
+            "submissions": [_report_dict(r) for r in reports],
+        })
+    return out
 
-def run_lifecycle_sweep():
-    try:
-        from lifecycle_sweep import run_lifecycle_sweep as _sweep
-        return _sweep()
-    except Exception:
-        return 0
 
-
-
-def list_clusters():
-    try:
-        from lifecycle_sweep import list_clusters as _delegated
-        if callable(_delegated):
-            return _delegated() or []
-    except Exception:
-        pass
-    try:
-        import db as _db
-        if callable(getattr(_db, "list_clusters", None)):
-            rows = _db.list_clusters()
-            return rows or []
-    except Exception:
-        pass
-    return []
-
+def sweep_expired_drafts():
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(hours=DRAFT_TTL_HOURS)).isoformat()
+    drafts = db.list_expired_drafts(cutoff)
+    removed = 0
+    base = os.path.dirname(__file__)
+    for d in drafts:
+        for sub in ("uploads", "letters"):
+            raw = d["image_path"] if sub == "uploads" else d["letter_path"]
+            if not raw:
+                continue
+            try:
+                p = os.path.join(base, sub, os.path.basename(raw))
+                if os.path.isfile(p):
+                    os.remove(p)
+            except OSError:
+                pass
+        db.delete_draft(d["id"])
+        removed += 1
+    return removed

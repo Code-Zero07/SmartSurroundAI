@@ -379,19 +379,21 @@ def create_cluster(fine_key, hazard_category, authority_area_key=None,
                    representative_report_id=None):
     now = datetime.now(timezone.utc).isoformat()
     conn = get_conn()
-    cur = conn.execute(
-        """
-        INSERT INTO corroboration_clusters
-            (corroboration_area_key, hazard_category, authority_area_key,
-             representative_report_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (fine_key, hazard_category, authority_area_key,
-         representative_report_id, now, now),
-    )
-    conn.commit()
-    cluster_id = cur.lastrowid
-    conn.close()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO corroboration_clusters
+                (corroboration_area_key, hazard_category, authority_area_key,
+                 representative_report_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (fine_key, hazard_category, authority_area_key,
+             representative_report_id, now, now),
+        )
+        conn.commit()
+        cluster_id = cur.lastrowid
+    finally:
+        conn.close()
     return get_cluster(cluster_id)
 
 

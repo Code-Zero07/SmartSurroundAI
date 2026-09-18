@@ -424,26 +424,14 @@ def admin():
 
 @app.route("/admin/api/clusters")
 def admin_api_clusters():
-    clusters    = corroboration.list_clusters()
-    authorities = authority_routing.list_authorities_for_admin()
-    cluster_list = []
-    for c in clusters:
-        cluster_list.append({
-            "id":                    c["id"],
-            "corroboration_area_key": c["corroboration_area_key"],
-            "hazard_type":           c["hazard_type"],
-            "window_start":          c["window_start"],
-            "lifecycle":             c["lifecycle"],
-            "letter_path":           c["letter_path"],
-            "emailed_at":            c["emailed_at"],
-            "created_at":            c["created_at"],
-        })
+    cluster_list = corroboration.clusters_for_admin()
     auth_list = []
-    for a in authorities:
+    for a in authority_routing.list_authorities_for_admin():
         auth_list.append({
             "id":                a["id"],
             "authority_area_key": a["authority_area_key"],
             "hazard_type":       a["hazard_type"],
+            "authority_name":    a["authority_name"],
             "email":             a["email"],
             "lifecycle":         a["lifecycle"],
             "created_at":        a["created_at"],

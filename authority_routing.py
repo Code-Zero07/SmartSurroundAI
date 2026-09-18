@@ -1,8 +1,11 @@
 """
 authority_routing.py
 --------------------
-Track B authority-email routing (additive; Track A's admin letter flow is
-untouched).
+Track B authority lookup for admin-authorized sending.
+
+Sending is always a human decision (cluster_service.py after admin approval);
+this module only resolves WHICH authority owns a coarse area for a hazard
+category — it never auto-sends.
 
 Lifecycle contract (a flip, NOT a new tier):
     pending -> verified        (authority email was delivered & confirmed,
@@ -12,15 +15,14 @@ Lifecycle contract (a flip, NOT a new tier):
     bounced  -> pending        (flip back — a corrected email re-enters the
                                 normal queue; nothing is ever deleted)
 
-Routing decision: a resolved corroboration cluster is handed to ONE authority.
-If the owning authority for the coarse area + hazard is `verified`, the email
-is auto-sent by the driver. Otherwise (unowned / pending / bounced) the
-cluster is placed on the admin authority-email queue so a human types or
-corrects the address — we never silently drop it and never auto-guess.
+Routing lookup: resolve_owner(coarse key + hazard_category) returns the
+verified authority for that territory + hazard. Unowned / pending / bounced
+clusters surface as `missing_authority_email` so the admin can type or
+correct the address — nothing is silently dropped and nothing is guessed.
 
 No state is duplicated: authority lifecycle lives in the `authorities` table;
 the routing decision is derived at call time from (authority_area_key,
-hazard_type) + the cluster's corroboration state.
+hazard_type).
 """
 
 from datetime import datetime, timezone
@@ -90,7 +92,7 @@ def route_cluster(cluster):
     if owner is None:
         return {"channel": "admin_queue",
                 "owner": None,
-                "reason": "no_verified_authority_for_area"}
+"reason": "no_verified_authority_for_area"}
     if owner["lifecycle"] != "verified":
         return {"channel": "admin_queue",
                 "owner": owner,
@@ -100,13 +102,4 @@ def route_cluster(cluster):
                 "owner": owner,
                 "reason": "bogus_email_guard"}
     return {"channel": "auto_email", "owner": owner, "reason": "verified_owner"}
-
-def route_pending_clusters():
-    try:
-        from corroboration import run_lifecycle_sweep as _s
-        if callable(_s):
-            return _s()
-    except Exception:
-        pass
-    return 0
 
