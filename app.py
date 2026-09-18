@@ -50,6 +50,9 @@ import letter_generator
 import corroboration
 import authority_routing
 import email_driver
+import hazard
+import geocode
+import cluster_service
 
 logger = logging.getLogger("smart_surround.auth")
 
@@ -210,6 +213,54 @@ def _valid_upload_token(tok):
     return exp is not None and exp >= time.time()
 
 # ---------------------------------------------------------------------------
+# Citizen API validation + token helpers
+# ---------------------------------------------------------------------------
+ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+MAX_IMAGE_BYTES = int(os.environ.get("MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))
+
+
+def _valid_image(image_file):
+    ext = os.path.splitext(image_file.filename or "")[1].lower()
+    if ext not in ALLOWED_IMAGE_EXT:
+        return False, "Unsupported image type."
+    image_file.seek(0, 2)
+    size = image_file.tell()
+    image_file.seek(0)
+    if size > MAX_IMAGE_BYTES:
+        return False, "Image too large."
+    return True, None
+
+
+def _validated_coords():
+    lat = request.form.get("lat") or None
+    lon = request.form.get("lon") or None
+    if lat is None and lon is None:
+        return None, None, None
+    try:
+        lat_f = float(lat) if lat else None
+        lon_f = float(lon) if lon else None
+    except ValueError:
+        return None, None, "Latitude/longitude must be numbers."
+    if (lat_f is not None and not (-90 <= lat_f <= 90)) or \
+       (lon_f is not None and not (-180 <= lon_f <= 180)):
+        return None, None, "Coordinates out of range."
+    return lat_f, lon_f, None
+
+
+def _require_upload_token():
+    tok = (request.form.get("_upload_token")
+           or request.args.get("_upload_token")
+           or request.headers.get("X-Upload-Token", ""))
+    return _valid_upload_token(tok)
+
+
+def _remove_file(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+# ---------------------------------------------------------------------------
 # Auth: login flow
 # ---------------------------------------------------------------------------
 def _set_auth_cookie(resp, tok):
@@ -346,56 +397,228 @@ def upload():
         flash("Please choose an image to upload.")
         return redirect(url_for("index"))
 
-    source      = request.form.get("source", "citizen")
-    lat         = request.form.get("lat") or None
-    lon         = request.form.get("lon") or None
-    description = request.form.get("description") or None
-    client_ip   = _client_ip()
-    hazard_type = "road_damage"
+    ok, err = _valid_image(image_file)
+    if not ok:
+        flash(err)
+        return redirect(url_for("index"))
 
-    ext       = os.path.splitext(image_file.filename)[1] or ".jpg"
+    source      = request.form.get("source", "citizen")
+    lat_f, lon_f, coord_err = _validated_coords()
+    if coord_err:
+        flash(coord_err)
+        return redirect(url_for("index"))
+    category = (request.form.get("hazard_category") or "road_damage").strip()
+    description = request.form.get("description") or None
+    location_name = (request.form.get("location_name") or "").strip() or None
+    client_ip = _client_ip()
+
+    svc = hazard.default_service()
+    if not svc.supported(category):
+        flash("Unsupported hazard category.")
+        return redirect(url_for("index"))
+
+    ext = os.path.splitext(image_file.filename)[1] or ".jpg"
     saved_name = f"{uuid.uuid4().hex}{ext}"
     saved_path = os.path.join(UPLOAD_DIR, saved_name)
     image_file.save(saved_path)
 
-    result = detector.analyze_road(saved_path)
-    if result["road_condition"] == "normal":
-        flash("No damage detected above the confidence threshold \u2014 nothing queued.")
+    try:
+        result = svc.detect(category, saved_path)
+    except hazard.ModelInferenceError:
+        _remove_file(saved_path)
+        flash("Detection failed. Try a clearer photo.")
+        return redirect(url_for("index"))
+    if not svc.validate(result):
+        _remove_file(saved_path)
+        flash("No valid hazard detected above the confidence threshold \u2014 nothing queued.")
         return redirect(url_for("index"))
 
-    damage_class = result["damage_type"] or "Unclassified damage"
-    severity     = detector.severity_for(damage_class)
-    lat_f        = float(lat) if lat else None
-    lon_f        = float(lon) if lon else None
-    corroboration_area_key = corroboration.fine_area_key(lat_f, lon_f)
-    authority_area_key     = corroboration.coarse_area_key(lat_f, lon_f)
+    damage_class = result.hazard_type or "Unclassified damage"
+    severity = detector.severity_for(damage_class)
+    fine_key = corroboration.fine_area_key(lat_f, lon_f)
+    coarse_key = corroboration.coarse_area_key(lat_f, lon_f)
+    authority_area = None
+    if lat_f is not None:
+        authority_area = geocode.reverse_geocode(lat_f, lon_f).get("authority_area")
 
-    # Store the BASENAME only. The templates build URLs as "/uploads/" +
-    # image_path.split("/")[-1]; storing the absolute Windows path leaked the
-    # whole drive path into that URL (every image 404'd). os.path.basename
-    # strips both / and \ separators, so this is safe regardless of OS.
     new_id = db.insert_detection(
-        image_path=os.path.basename(saved_path), source=source, damage_class=damage_class,
-        confidence=result["confidence"], severity=severity, lat=lat_f, lon=lon_f,
-        description=description, ai_accepted=result["accepted"], client_ip=client_ip,
-        hazard_type=hazard_type, corroboration_area_key=corroboration_area_key,
-authority_area_key=authority_area_key,
+        image_path=os.path.basename(saved_path), source=source,
+        damage_class=damage_class, confidence=result.confidence,
+        severity=severity, lat=lat_f, lon=lon_f, description=description,
+        ai_accepted=bool(result.confidence and result.confidence >= 0.6),
+        client_ip=client_ip, hazard_category=result.hazard_category,
+        hazard_type=result.hazard_type, location_name=location_name,
+        authority_area=authority_area, detection_model=result.model,
+        detection_model_version=result.model_version,
+        corroboration_area_key=fine_key, authority_area_key=coarse_key,
     )
+    if fine_key is not None:
+        corroboration.assign_report_to_cluster(
+            new_id, fine_key, result.hazard_category, authority_area_key=coarse_key)
 
-    emailed = corroboration.run_lifecycle_sweep()
-
-    if emailed:
-        flash(f"Detection #{new_id} ({damage_class}, {severity}) queued. "
-              f"Auto-emailed {emailed} corroborated cluster(s).")
-    elif result["road_condition"] == "damaged_unclassified":
-        confidence_note = "unclassified \u2014 multiple weak signals, needs a closer look"
-        flash(f"Detection #{new_id} ({damage_class}, {severity}, {confidence_note}) "
-              f"queued for admin verification.")
-    else:
-        confidence_note = "high-confidence" if result["accepted"] else "uncertain \u2014 needs a closer look"
-        flash(f"Detection #{new_id} ({damage_class}, {severity}, {confidence_note}) "
-              f"queued for admin verification.")
+    flash(f"Report #{new_id} ({result.hazard_type or 'hazard'}, {severity}) queued for review. "
+          "No email is sent for citizen submissions \u2014 an authorized review notifies the authority.")
     return redirect(url_for("index"))
+
+# ---------------------------------------------------------------------------
+# Public citizen API
+# ---------------------------------------------------------------------------
+@app.route("/api/geocode")
+def api_geocode():
+    if not _require_upload_token():
+        return jsonify({"ok": False, "message": "Valid upload token required."}), 401
+    try:
+        lat = float(request.args.get("lat", ""))
+        lon = float(request.args.get("lon", ""))
+    except ValueError:
+        return jsonify({"ok": False, "message": "Latitude/longitude must be numbers."}), 400
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        return jsonify({"ok": False, "message": "Coordinates out of range."}), 400
+    return jsonify({"ok": True, **geocode.reverse_geocode(lat, lon)})
+
+
+@app.route("/api/detect", methods=["POST"])
+def api_detect():
+    if not _require_upload_token():
+        return jsonify({"ok": False, "message": "Valid upload token required."}), 401
+    image_file = request.files.get("image")
+    if not image_file or image_file.filename == "":
+        return jsonify({"ok": False, "message": "An image is required."}), 400
+    ok, err = _valid_image(image_file)
+    if not ok:
+        return jsonify({"ok": False, "message": err}), 400
+    lat_f, lon_f, err = _validated_coords()
+    if err:
+        return jsonify({"ok": False, "message": err}), 400
+    category = (request.form.get("hazard_category") or "road_damage").strip()
+    svc = hazard.default_service()
+    if not svc.supported(category):
+        return jsonify({"ok": False,
+                        "message": f"Unsupported hazard category: {category}"}), 400
+    ext = os.path.splitext(image_file.filename)[1] or ".jpg"
+    tmp_path = os.path.join(UPLOAD_DIR, f"tmp_{uuid.uuid4().hex}{ext}")
+    image_file.save(tmp_path)
+    try:
+        result = svc.detect(category, tmp_path)
+    except hazard.ModelInferenceError:
+        return jsonify({"ok": False,
+                        "message": "Detection failed. Try a clearer photo."}), 422
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+    return jsonify({"ok": True, "valid": svc.validate(result),
+                    **result.to_dict()})
+
+
+@app.route("/api/report/preview", methods=["POST"])
+def api_report_preview():
+    if not _require_upload_token():
+        return jsonify({"ok": False, "message": "Valid upload token required."}), 401
+    corroboration.sweep_expired_drafts()  # opportunistic draft hygiene
+    image_file = request.files.get("image")
+    if not image_file or image_file.filename == "":
+        return jsonify({"ok": False, "message": "An image is required."}), 400
+    ok, err = _valid_image(image_file)
+    if not ok:
+        return jsonify({"ok": False, "message": err}), 400
+    lat_f, lon_f, err = _validated_coords()
+    if err:
+        return jsonify({"ok": False, "message": err}), 400
+    if lat_f is None or lon_f is None:
+        return jsonify({"ok": False,
+                        "message": "Latitude and longitude are required to file a report."}), 400
+    category = (request.form.get("hazard_category") or "road_damage").strip()
+    svc = hazard.default_service()
+    if not svc.supported(category):
+        return jsonify({"ok": False,
+                        "message": f"Unsupported hazard category: {category}"}), 400
+    location_name = (request.form.get("location_name") or "").strip() or None
+
+    ext = os.path.splitext(image_file.filename)[1] or ".jpg"
+    saved_name = f"{uuid.uuid4().hex}{ext}"
+    saved_path = os.path.join(UPLOAD_DIR, saved_name)
+    image_file.save(saved_path)
+
+    # AUTHORITATIVE detection: the client's detection/confidence is never
+    # trusted here — the server re-runs the model on the uploaded image.
+    try:
+        result = svc.detect(category, saved_path)
+    except hazard.ModelInferenceError:
+        _remove_file(saved_path)
+        return jsonify({"ok": False,
+                        "message": "Detection failed. Try a clearer photo."}), 422
+    if not svc.validate(result):
+        _remove_file(saved_path)
+        return jsonify({"ok": False,
+                        "message": "No valid hazard detected above the confidence threshold."}), 422
+
+    damage_class = result.hazard_type or "Unclassified damage"
+    severity = detector.severity_for(damage_class)
+    fine_key = corroboration.fine_area_key(lat_f, lon_f)
+    coarse_key = corroboration.coarse_area_key(lat_f, lon_f)
+    authority_area = geocode.reverse_geocode(lat_f, lon_f).get("authority_area")
+
+    draft_id = db.insert_detection(
+        image_path=os.path.basename(saved_path), source="citizen",
+        damage_class=damage_class, confidence=result.confidence,
+        severity=severity, lat=lat_f, lon=lon_f, description=None,
+        ai_accepted=bool(result.confidence and result.confidence >= 0.6),
+        client_ip=_client_ip(), hazard_category=result.hazard_category,
+        hazard_type=result.hazard_type, location_name=location_name,
+        authority_area=authority_area, detection_model=result.model,
+        detection_model_version=result.model_version,
+        corroboration_area_key=fine_key, authority_area_key=coarse_key,
+        status="draft",
+    )
+    try:
+        letter_path = letter_generator.generate_letter(db.get_detection(draft_id))
+    except Exception:
+        _remove_file(saved_path)
+        db.delete_draft(draft_id)
+        return jsonify({"ok": False,
+                        "message": "Could not generate the report letter."}), 500
+    db.update_status(draft_id, "draft", letter_path=os.path.basename(letter_path))
+
+    return jsonify({"ok": True, "report_id": draft_id,
+                    "pdf_url": f"/api/report/{draft_id}/pdf",
+                    "detection": result.to_dict(),
+                    "authority_area": authority_area})
+
+
+@app.route("/api/report/<int:draft_id>/pdf")
+def api_report_pdf(draft_id):
+    if not _require_upload_token():
+        return jsonify({"ok": False, "message": "Valid upload token required."}), 401
+    detection = db.get_detection(draft_id)
+    if detection is None or detection["status"] != "draft" \
+       or not detection["letter_path"]:
+        return "No preview PDF available.", 404
+    return send_from_directory(letter_generator.LETTERS_DIR,
+                               os.path.basename(detection["letter_path"]))
+
+
+@app.route("/api/report/<int:draft_id>/submit", methods=["POST"])
+def api_report_submit(draft_id):
+    if not _require_upload_token():
+        return jsonify({"ok": False, "message": "Valid upload token required."}), 401
+    draft = db.get_detection(draft_id)
+    if draft is None or draft["status"] != "draft":
+        return jsonify({"ok": False,
+                        "message": "Draft not found or already submitted."}), 400
+    # Finalize the STORED draft: detection/coords/location_name are the
+    # server-authoritative values captured at preview. Nothing from the client.
+    fine_key = corroboration.fine_area_key(draft["lat"], draft["lon"])
+    coarse_key = corroboration.coarse_area_key(draft["lat"], draft["lon"])
+    db.update_status(draft_id, "pending")
+    cluster_id = None
+    if fine_key is not None:
+        cluster_id = corroboration.assign_report_to_cluster(
+            draft_id, fine_key, draft["hazard_category"],
+            authority_area_key=coarse_key)
+    return jsonify({"ok": True, "report_id": draft_id, "cluster_id": cluster_id,
+                    "message": "Report submitted for review. No email is sent on submission."})
 
 # ---------------------------------------------------------------------------
 # Auth: login flow
