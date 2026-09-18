@@ -231,3 +231,24 @@ Track A (detect -> admin verify -> letter PDF) is UNTOUCHED. Track B layers on:
   local .env just works; all vars optional with the safe defaults above.
 - Docs: `docs/LOGIN_PROTECTION.md` (auth/rate-limit/upload-token compliance)
   and `docs/TRACKB_WORKLOG.md` (worklog + test plan).
+
+### Extensible hazard workflow — env surface (2026-09-18)
+
+The citizen wizard now talks to a generic detection layer and the citizen path
+never emails anyone (an authorized admin approves/sends per cluster). New knobs:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HAZARD_CATEGORIES` | `road_damage` | Comma-separated registered hazard categories. |
+| `GEOCODE_URL` | `https://nominatim.openstreetmap.org/reverse` | Reverse-geocoding endpoint; **server-side only**, never exposed to the frontend. Point at a self-hosted Nominatim in production. |
+| `GEOCODE_TIMEOUT` | `5` | Reverse-geocode call timeout (seconds). |
+| `GEOCODE_USER_AGENT` | `SmartSurround/0.1 (admin@smartsurround.local)` | `User-Agent` header on geocoding requests. |
+| `ROAD_DAMAGE_MIN_CONF` | falls back to `ROAD_DAMAGE_CONF_THRESHOLD` (0.35) | Per-category validation threshold for `road_damage`; per-category thresholds are centralized in `hazard.py`. |
+| `DRAFT_TTL_HOURS` | `24` | Abandoned-draft sweep age — pre-submit drafts older than this are deleted automatically. |
+| `MAX_IMAGE_BYTES` | `10485760` (10 MiB) | Image size cap for `/api/detect`, `/api/report/preview`, and `/upload`. |
+
+**Marked legacy / no longer used** — the old auto-send corroboration knobs
+(thresholds + windows) were removed; clustering is generation/cluster-id based
+and has no threshold or window logic:
+- `CORROBORATION_THRESHOLD`
+- `CORROBORATION_WINDOW_SECONDS`

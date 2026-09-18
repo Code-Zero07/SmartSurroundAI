@@ -179,10 +179,3 @@ def send_authority_email(authority_email, subject, body, attachment_path):
         "effective_recipient": to,
         "original_recipient": authority_email,
     }
-
-
-def mark_letter_recorded(cluster_id, letter_path, window_tag=None):
-    """Track B bookkeeping: the PDF is kept on the cluster row; the letter is
-    not emailed in test mode. Called by the corroboration sweep AFTER the
-    driver decision so the admin surface shows exactly what was decided."""
-    db.mark_cluster_recorded(cluster_id, letter_path=letter_path, window_tag=window_tag)
