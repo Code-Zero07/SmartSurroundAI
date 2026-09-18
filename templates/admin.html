@@ -19,6 +19,12 @@
     .card { display: flex; gap: 16px; border: 1px solid #e2e2e2; border-radius: 8px;
             padding: 14px; margin-bottom: 12px; align-items: flex-start; }
     .card img { width: 140px; height: 105px; object-fit: cover; border-radius: 6px; }
+    .report-thumb { width: 140px; border: 1px solid #e2e2e2; border-radius: 6px; overflow: hidden; }
+    .report-thumb img { width: 140px; height: 105px; object-fit: cover; display: block; }
+    .report-thumb .meta { flex: none; font-size: 0.75rem; line-height: 1.45; padding: 6px 8px; }
+    .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 8px; }
+    .send-error { color: #e03131; font-size: 0.8rem; margin: 0 0 6px; }
+    .expand-sub { background: #f1f3f5; color: #343a40; font-size: 0.8rem; padding: 6px 10px; margin-top: 8px; }
     .meta { flex: 1; font-size: 0.9rem; line-height: 1.5; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem;
              font-weight: 700; color: white; }
@@ -253,11 +259,16 @@
         }).catch(function () { toast("Network error.", "err"); });
       }
 
+      var CLUSTER_BADGE_COLORS = {
+        pending_approval: "open",
+        approved: "corroborated",
+        missing_authority_email: "corroborated",
+        sent: "emailed",
+        settled: "settled"
+      };
       function lifecycleBadge(lc) {
-        var label = lc || "open";
-        var cls = {open:"open", corroborated:"corroborated",
-                   emailed:"emailed", settled:"settled"}[label] || "open";
-        return '<span class="lifecycle ' + cls + '">' + label + "</span>";
+        var cls = CLUSTER_BADGE_COLORS[lc] || "open";
+        return '<span class="lifecycle ' + cls + '">' + (lc || "pending_approval") + "</span>";
       }
 
       function authBadge(lc) {
@@ -267,15 +278,70 @@
         return '<span class="auth-lifecycle ' + cls + '">' + label + "</span>";
       }
 
-      function emailStatusBadge(row) {
-        if (row.lifecycle === "emailed") {
-          return ' <span class="lifecycle emailed">SENT ' +
-                 (row.emailed_at ? row.emailed_at.slice(0, 19).replace("T", " ") : "") + "</span>";
+      function reportThumb(r) {
+        if (!r || !r.image_url) return "";
+        var conf = r.confidence != null ? Math.round(r.confidence * 100) + "%" : "—";
+        var type = r.hazard_type || "—";
+        return '<div class="report-thumb"><img src="' + r.image_url + '" alt="report photo">' +
+               '<div class="meta">' + type + " · " + conf +
+               '<br>#' + r.id + ' <span class="lifecycle ' + (r.status === "rejected" ? "settled" : "open") + '">' +
+               r.status + "</span></div></div>";
+      }
+
+      function clusterCard(row) {
+        var rep = row.representative;
+        var repHtml = rep
+          ? reportThumb(rep).replace('<div class="meta">', '<div class="meta"><b>Representative</b><br>')
+          : '<p>No eligible representative.</p>';
+        var others = row.submissions || [];
+        var otherCount = others.length - (rep ? 1 : 0);
+        var othersHtml = "";
+        if (otherCount > 0) {
+          var items = others
+            .filter(function (r) { return !rep || r.id !== rep.id; })
+            .map(reportThumb).join("");
+          othersHtml = '<button type="button" class="expand-sub" data-cluster="' + row.id + '">▼ View ' +
+                       otherCount + ' other submission(s)</button><div class="sub-grid" id="subs-' + row.id + '" hidden>' +
+                       items + "</div>";
         }
-        if (row.lifecycle === "corroborated") {
-          return ' <span class="lifecycle corroborated">ROUTED&nbsp;/&nbsp;QUEUED</span>';
+
+        var actions = "";
+        if (row.lifecycle === "pending_approval") {
+          actions = '<button class="approve protected" data-action="cluster-approve" data-id="' + row.id + '">Approve Cluster</button> ' +
+                    '<button class="reject protected" data-action="cluster-settle" data-id="' + row.id + '">Settle (no send)</button>';
+        } else if (row.lifecycle === "approved" || row.lifecycle === "missing_authority_email") {
+          if (row.last_send_error) {
+            actions += '<p class="send-error">Last send error: <code>' + row.last_send_error + "</code></p>";
+          }
+          actions += '<button class="approve protected" data-action="cluster-send" data-id="' + row.id + '">Send to Authority</button>';
+          actions += '<div class="form-inline" style="margin-top:6px;">' +
+                     '<input type="text" id="auth-email-' + row.id + '" placeholder="authority@example.org">' +
+                     '<button class="add-auth protected" data-action="cluster-authority-email" data-id="' + row.id + '">Set email &amp; send</button></div>';
+        } else if (row.lifecycle === "missing_authority_email") {
+          actions += '<div class="form-inline" style="margin-top:6px;">' +
+                     '<input type="text" id="auth-email-' + row.id + '" placeholder="authority@example.org">' +
+                     '<button class="add-auth protected" data-action="cluster-authority-email" data-id="' + row.id + '">Set email &amp; send</button></div>';
+        } else if (row.lifecycle === "sent") {
+          actions += '<span class="lifecycle emailed">SENT' +
+                     (row.sent_at ? " " + row.sent_at.slice(0, 19).replace("T", " ") : "") + "</span>" +
+                     (row.letter_path ? ' <a href="#letter-' + row.id + '">letter recorded</a>' : "");
+        } else if (row.lifecycle === "settled") {
+          actions += '<span class="lifecycle settled">SETTLED — no send</span>';
         }
-        return "";
+
+        return '<div class="card cluster-card">' +
+          '<div class="meta">' +
+            "<div><b>Cluster #" + row.id + "</b> &nbsp;" +
+            '<span class="mono">' + (row.corroboration_area_key || "—") + "</span> &nbsp; " +
+            lifecycleBadge(row.lifecycle) + "</div>" +
+            "<div>Hazard: <b>" + (row.hazard_category || "—").replace(/_/g, " ") + "</b> &nbsp; " +
+            "Reports: <b>" + row.report_count + "</b></div>" +
+            "<div class='mono'>Authority area: " + (row.authority_area_key || "—") + "</div>" +
+            repHtml +
+            othersHtml +
+          "</div>" +
+          '<div class="actions">' + actions + "</div>" +
+          "</div>";
       }
 
       function loadClusters() {
@@ -286,20 +352,18 @@
 
             var c = data.clusters || [];
             var html = c.length
-              ? '<table><thead><tr><th>ID</th><th>Fine area</th><th>Hazard</th><th>Window start</th>' +
-                '<th>Lifecycle</th><th>Emailed</th><th>Letter</th></tr></thead><tbody>' +
-                c.map(function (row) {
-                  return "<tr><td>" + row.id + "</td><td class='mono'>" +
-                    (row.corroboration_area_key || "—") + "</td><td>" +
-                    (row.hazard_type || "—") + "</td><td class='mono'>" +
-                    (row.window_start || "—") + "</td><td>" +
-                    lifecycleBadge(row.lifecycle) + "</td><td>" +
-                    emailStatusBadge(row) + "</td><td>" +
-                    (row.letter_path ? "recorded" : "—") +
-                    "</td></tr>";
-                }).join("") + "</tbody></table>"
-              : "<p>No corroboration clusters yet.</p>";
+              ? c.map(clusterCard).join("")
+              : "<p>No clusters yet — submitted reports appear here after review.</p>";
             clustersWrap.innerHTML = html;
+
+            document.querySelectorAll(".expand-sub").forEach(function (btn) {
+              btn.addEventListener("click", function () {
+                var t = document.getElementById("subs-" + btn.dataset.cluster);
+                var hidden = t.hidden;
+                t.hidden = !hidden;
+                btn.textContent = hidden ? "▲ Hide other submissions" : "▼ View other submissions";
+              });
+            });
 
             var auth = data.authorities || [];
             var ahtml = auth.length
@@ -333,6 +397,19 @@
         else if (action === "reject") handleProtected("/admin/reject/" + id, "Rejected.");
         else if (action === "authority-verify") handleProtected("/admin/authority/" + id + "/verify", "Authority verified.");
         else if (action === "authority-bounce") handleProtected("/admin/authority/" + id + "/bounce", "Authority bounced.");
+        else if (action === "cluster-approve")
+          handleProtected("/admin/cluster/" + id + "/approve", "Cluster approved; email attempted.");
+        else if (action === "cluster-send")
+          handleProtected("/admin/cluster/" + id + "/send", "Send attempted.");
+        else if (action === "cluster-settle")
+          handleProtected("/admin/cluster/" + id + "/settle", "Cluster settled.");
+        else if (action === "cluster-authority-email") {
+          var em = document.getElementById("auth-email-" + id).value.trim();
+          if (!em) { toast("Enter an authority email.", "warn"); return; }
+          var fd = new FormData();
+          fd.append("email", em);
+          handleProtected("/admin/cluster/" + id + "/authority-email", "Email set; send attempted.", fd);
+        }
         else if (action === "test-email") handleProtected("/admin/test-email", "Test email attempted.");
         else if (action === "authority-add") {
           var area = document.getElementById("auth-area-key").value.trim();
