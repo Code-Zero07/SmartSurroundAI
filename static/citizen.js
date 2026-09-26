@@ -39,7 +39,13 @@
   function detectError(msg) {
     var el = $("detect-error");
     el.textContent = msg;
-    el.hidden = false;
+    el.hidden = !msg;
+  }
+  function setDetectStatus(msg) {
+    var el = $("photo-detect-status");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.hidden = !msg;
   }
 
   // ---- Location -----------------------------------------------------------
@@ -128,6 +134,7 @@
       snapshotImg.hidden = false; video.hidden = true;
       $("capture-btn").disabled = true; $("retake-btn").hidden = false;
       $("photo-next").disabled = false;
+      startDetection();
     }, "image/jpeg", 0.92);
   }
   function ensureFileAlt() {
@@ -139,6 +146,8 @@
         state.imageFile = fileAlt.files[0];
         capturedBlob = null;
         $("photo-next").disabled = false;
+        snapshotImg.hidden = true;
+        startDetection();
       }
     });
     document.body.appendChild(fileAlt);
@@ -150,39 +159,102 @@
   }
 
   // ---- API calls ------------------------------------------------------------
-  function detectImage() {
-    clearError(); detectError(""); $("detect-error").hidden = true;
-    $("detect-btn").disabled = true;
+  // Auto-detection: runs whenever a photo is captured or selected. A sequence
+  // number discards stale responses (photo replaced mid-flight), and the
+  // in-flight check suppresses duplicate concurrent requests for the same image.
+  var detectSeq = 0, detectInFlightFor = null;
+
+  function renderDetectionResult(d) {
+    // Shown immediately on the current step: mirrored on the Photo step (step 2)
+    // and the Detection step (step 3), so no navigation is needed to see it.
+    var html =
+      "<div class='field'><b>Hazard:</b> " + (d.hazard_category || "—").replace(/_/g, " ") +
+      "</div><div class='field'><b>Type:</b> " + (d.hazard_type || "—").replace(/_/g, " ") +
+      "</div><div class='field'><b>Detected:</b> " + (d.detected ? "Yes" : "No") + "</div>" +
+      "<div class='field'><b>Confidence:</b> " +
+      (d.confidence != null ? Math.round(d.confidence * 100) + "%" : "—") + "</div>" +
+      "<div class='field'><b>Validity:</b> " + (d.valid ? "Valid" : "Invalid") + "</div>";
+    ["detection-result", "photo-detection-result"].forEach(function (id) {
+      var el = $(id);
+      if (el) { el.innerHTML = html; el.hidden = false; }
+    });
+  }
+
+  function hideDetectionResult() {
+    ["detection-result", "photo-detection-result"].forEach(function (id) {
+      var el = $(id);
+      if (el) { el.innerHTML = ""; el.hidden = true; }
+    });
+  }
+
+  function startDetection() {
+    if (!state.imageFile) return;
+    if (detectInFlightFor === state.imageFile) return; // one request per image
+    var seq = ++detectSeq;
+    detectInFlightFor = state.imageFile;
+    state.detection = null;
+
+    clearError();
+    detectError("");
+    hideDetectionResult();
+    $("detect-next").disabled = true;
+    $("detect-loading").hidden = false;
+    setDetectStatus("Analyzing photo…");
+
     var fd = new FormData();
     fd.append("image", state.imageFile, "report.jpg");
     fd.append("lat", state.lat); fd.append("lon", state.lon);
+
+    function done(ok) {
+      if (seq !== detectSeq) return; // stale — photo was replaced
+      detectInFlightFor = null;
+      $("detect-loading").hidden = true;
+      setDetectStatus(ok ? "Detection complete." : "Detection failed.");
+    }
+
     token().then(function (t) {
-      if (!t) { $("detect-btn").disabled = false; return; }
+      if (!t) { done(false); return; }
+      if (seq !== detectSeq) return;
       fd.append("_upload_token", t);
       return fetch("/api/detect", { method: "POST", body: fd });
     })
-    .then(function (r) { return r.json(); })
+    .then(function (r) { return r && r.json ? r.json() : null; })
     .then(function (d) {
-      $("detect-btn").disabled = false;
-      if (!d.ok) { detectError(d.message || "Detection failed."); return; }
+      if (seq !== detectSeq || !d) return; // stale or aborted
+      if (!d.ok) {
+        done(false);
+        detectError(d.message || "Detection failed.");
+        setDetectStatus(d.message || "Detection failed.");
+        return;
+      }
       state.detection = d;
-      $("detection-result").hidden = false;
-      $("detection-result").innerHTML =
-        "<div class='field'><b>Hazard:</b> " + (d.hazard_category || "—").replace(/_/g, " ") +
-        "</div><div class='field'><b>Type:</b> " + (d.hazard_type || "—").replace(/_/g, " ") +
-        "</div><div class='field'><b>Confidence:</b> " +
-        (d.confidence != null ? Math.round(d.confidence * 100) + "%" : "—") + "</div>";
+      renderDetectionResult(d);
       if (!d.valid) {
         detectError("No sufficiently valid hazard detected — try a clearer photo.");
+        setDetectStatus("No valid hazard detected — try a clearer photo.");
         $("detect-next").disabled = true;
+        done(false);
       } else {
+        detectError("");
         $("detect-next").disabled = false;
+        done(true);
       }
+    })
+    .catch(function () {
+      if (seq !== detectSeq) return;
+      done(false);
+      detectError("Detection failed — check your connection and try again.");
+      setDetectStatus("Detection failed — check your connection and try again.");
     });
   }
 
   var draftSummary = null;
   function generatePreview() {
+    if (!state.detection || !state.detection.valid) {
+      clearError();
+      error("Detection has not passed for this photo — go back and use a clearer photo.");
+      return;
+    }
     $("generate-btn").disabled = true;
     var fd = new FormData();
     fd.append("image", state.imageFile, "report.jpg");
@@ -241,7 +313,6 @@
   $("retake-btn").addEventListener("click", function () { stopStream(); startCamera(); });
   $("photo-next").addEventListener("click", function () { showStep(3); });
   $("detect-back").addEventListener("click", function () { showStep(2); });
-  $("detect-btn").addEventListener("click", detectImage);
   $("detect-next").addEventListener("click", function () { showStep(4); });
   $("preview-back").addEventListener("click", function () { showStep(3); });
   $("generate-btn").addEventListener("click", generatePreview);

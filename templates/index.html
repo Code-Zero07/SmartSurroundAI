@@ -105,17 +105,19 @@
         <button type="button" id="retake-btn" hidden>Retake</button>
       </div>
     </div>
+    <p id="photo-detect-status" hidden style="font-size:0.9rem;color:#555;margin-top:8px;"></p>
+    <div id="photo-detection-result" class="result-card" hidden></div>
     <div class="step-nav">
       <button type="button" id="photo-back">Back</button>
-      <button type="button" id="photo-next" disabled>Next: Detect</button>
+      <button type="button" id="photo-next" disabled>Next: Detection</button>
     </div>
   </section>
 
   <!-- Step 3: Detection -->
   <section class="step" id="step-3">
     <label>Detection</label>
-    <p>Analyzing your photo against active hazard models (currently: road damage).</p>
-    <button type="button" id="detect-btn">Run Detection</button>
+    <p>Detection runs automatically when you take or choose a photo, against active hazard models (currently: road damage).</p>
+    <p id="detect-loading" hidden style="font-size:0.9rem;color:#1971c2;margin-top:8px;">Analyzing your photo…</p>
     <div id="detection-result" class="result-card" hidden></div>
     <p id="detect-error" class="bad" hidden style="padding:10px 14px;border-radius:6px;"></p>
     <div class="step-nav">
