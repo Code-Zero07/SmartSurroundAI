@@ -23,6 +23,7 @@
     .report-thumb img { width: 140px; height: 105px; object-fit: cover; display: block; }
     .report-thumb .meta { flex: none; font-size: 0.75rem; line-height: 1.45; padding: 6px 8px; }
     .sub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 8px; }
+    .sub-grid[hidden] { display: none; }
     .send-error { color: #e03131; font-size: 0.8rem; margin: 0 0 6px; }
     .expand-sub { background: #f1f3f5; color: #343a40; font-size: 0.8rem; padding: 6px 10px; margin-top: 8px; }
     .meta { flex: 1; font-size: 0.9rem; line-height: 1.5; }
@@ -288,6 +289,8 @@
                r.status + "</span></div></div>";
       }
 
+      var expandedClusters = {};
+
       function clusterCard(row) {
         var rep = row.representative;
         var repHtml = rep
@@ -300,9 +303,11 @@
           var items = others
             .filter(function (r) { return !rep || r.id !== rep.id; })
             .map(reportThumb).join("");
-          othersHtml = '<button type="button" class="expand-sub" data-cluster="' + row.id + '">▼ View ' +
-                       otherCount + ' other submission(s)</button><div class="sub-grid" id="subs-' + row.id + '" hidden>' +
-                       items + "</div>";
+          var expanded = !!expandedClusters[row.id];
+          othersHtml = '<button type="button" class="expand-sub" data-cluster="' + row.id + '">' +
+                       (expanded ? "▲ Hide other submissions" : "▼ Show other submissions") +
+                       '</button><div class="sub-grid" id="subs-' + row.id + '"' +
+                       (expanded ? "" : " hidden") + ">" + items + "</div>";
         }
 
         var actions = "";
@@ -359,9 +364,12 @@
             document.querySelectorAll(".expand-sub").forEach(function (btn) {
               btn.addEventListener("click", function () {
                 var t = document.getElementById("subs-" + btn.dataset.cluster);
-                var hidden = t.hidden;
-                t.hidden = !hidden;
-                btn.textContent = hidden ? "▲ Hide other submissions" : "▼ View other submissions";
+                if (!t) return;
+                var nowExpanded = t.hidden;
+                t.hidden = !nowExpanded;
+                expandedClusters[btn.dataset.cluster] = nowExpanded;
+                btn.textContent = nowExpanded ? "▲ Hide other submissions"
+                                              : "▼ Show other submissions";
               });
             });
 
