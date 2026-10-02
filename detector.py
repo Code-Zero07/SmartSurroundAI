@@ -77,7 +77,7 @@ DEFAULT_MODEL_PATH = os.path.join(BASE_DIR, "models", "road_damage_yolov8s.pt")
 
 MODEL_PATH = os.environ.get("ROAD_DAMAGE_MODEL_PATH", DEFAULT_MODEL_PATH)
 CONFIDENCE_THRESHOLD = float(os.environ.get("ROAD_DAMAGE_CONF_THRESHOLD", 0.35))
-ACCEPT_THRESHOLD = float(os.environ.get("ROAD_DAMAGE_ACCEPT_THRESHOLD", 0.60))
+ACCEPT_THRESHOLD = float(os.environ.get("ROAD_DAMAGE_ACCEPT_THRESHOLD", 0.50))
 FALLBACK_EVIDENCE_THRESHOLD = float(os.environ.get("ROAD_DAMAGE_FALLBACK_THRESHOLD", 0.45))
 
 # The floor used when we pull raw model output — well below

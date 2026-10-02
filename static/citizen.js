@@ -230,8 +230,15 @@
       state.detection = d;
       renderDetectionResult(d);
       if (!d.valid) {
-        detectError("No sufficiently valid hazard detected — try a clearer photo.");
-        setDetectStatus("No valid hazard detected — try a clearer photo.");
+        // Same mechanism as any other detection failure, but the reason is
+        // specific: the server already distinguished "saw damage but not
+        // confidently enough" from "saw no damage". Plain-language copy only --
+        // no threshold names or detector internals are exposed.
+        var msg = d.confidence != null
+          ? "Detection confidence is below the 50% threshold. Please capture a clearer photo."
+          : "No road damage detected — try a clearer photo of the road surface.";
+        detectError(msg);
+        setDetectStatus(msg);
         $("detect-next").disabled = true;
         done(false);
       } else {

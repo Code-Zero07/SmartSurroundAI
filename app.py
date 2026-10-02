@@ -45,7 +45,6 @@ from flask import (
 )
 
 import db
-import detector
 import letter_generator
 import corroboration
 import authority_routing
@@ -260,6 +259,36 @@ def _remove_file(path):
     except OSError:
         pass
 
+
+# ---------------------------------------------------------------------------
+# Citizen-facing reason a detection cannot reach the Admin queue.
+#
+# "50%" here is PRESENTATION copy for the detector's acceptance threshold, not a
+# second copy of the policy: the decision itself always comes from the
+# detector's `accepted` verdict via hazard.DetectionService.eligible_for_queue,
+# so no route re-derives it. app.py cannot read detector.ACCEPT_THRESHOLD
+# directly because remote mode deliberately does not import the detector, and
+# tests/test_report_flow.py pins this wording against the canonical value so the
+# two cannot drift apart unnoticed.
+# ---------------------------------------------------------------------------
+_BELOW_ACCEPTANCE_MESSAGE = (
+    "Detection confidence is below the 50% threshold. "
+    "Please capture a clearer photo."
+)
+_NO_DAMAGE_MESSAGE = (
+    "No road damage detected — try a clearer photo of the road surface."
+)
+
+
+def _not_eligible_message(svc, result):
+    """Why this detection is blocked, in plain language.
+
+    Distinguishes "we saw damage but it isn't confident enough" from "we saw no
+    damage at all", so the citizen is not told to retake a photo that simply had
+    nothing wrong with it.
+    """
+    return _BELOW_ACCEPTANCE_MESSAGE if svc.validate(result) else _NO_DAMAGE_MESSAGE
+
 # ---------------------------------------------------------------------------
 # Auth: login flow
 # ---------------------------------------------------------------------------
@@ -428,13 +457,13 @@ def upload():
         _remove_file(saved_path)
         flash("Detection failed. Try a clearer photo.")
         return redirect(url_for("index"))
-    if not svc.validate(result):
+    if not svc.eligible_for_queue(result):
         _remove_file(saved_path)
-        flash("No valid hazard detected above the confidence threshold \u2014 nothing queued.")
+        flash(_not_eligible_message(svc, result))
         return redirect(url_for("index"))
 
-    damage_class = result.hazard_type or "Unclassified damage"
-    severity = detector.severity_for(damage_class)
+    damage_class = result.damage_class
+    severity = result.severity
     fine_key = corroboration.fine_area_key(lat_f, lon_f)
     coarse_key = corroboration.coarse_area_key(lat_f, lon_f)
     authority_area = None
@@ -445,7 +474,7 @@ def upload():
         image_path=os.path.basename(saved_path), source=source,
         damage_class=damage_class, confidence=result.confidence,
         severity=severity, lat=lat_f, lon=lon_f, description=description,
-        ai_accepted=bool(result.confidence and result.confidence >= 0.6),
+        ai_accepted=bool(result.accepted),
         client_ip=client_ip, hazard_category=result.hazard_category,
         hazard_type=result.hazard_type, location_name=location_name,
         authority_area=authority_area, detection_model=result.model,
@@ -508,7 +537,7 @@ def api_detect():
             os.remove(tmp_path)
         except OSError:
             pass
-    return jsonify({"ok": True, "valid": svc.validate(result),
+    return jsonify({"ok": True, "valid": svc.eligible_for_queue(result),
                     **result.to_dict()})
 
 
@@ -549,13 +578,13 @@ def api_report_preview():
         _remove_file(saved_path)
         return jsonify({"ok": False,
                         "message": "Detection failed. Try a clearer photo."}), 422
-    if not svc.validate(result):
+    if not svc.eligible_for_queue(result):
         _remove_file(saved_path)
         return jsonify({"ok": False,
-                        "message": "No valid hazard detected above the confidence threshold."}), 422
+                        "message": _not_eligible_message(svc, result)}), 422
 
-    damage_class = result.hazard_type or "Unclassified damage"
-    severity = detector.severity_for(damage_class)
+    damage_class = result.damage_class
+    severity = result.severity
     fine_key = corroboration.fine_area_key(lat_f, lon_f)
     coarse_key = corroboration.coarse_area_key(lat_f, lon_f)
     authority_area = geocode.reverse_geocode(lat_f, lon_f).get("authority_area")
@@ -564,7 +593,7 @@ def api_report_preview():
         image_path=os.path.basename(saved_path), source="citizen",
         damage_class=damage_class, confidence=result.confidence,
         severity=severity, lat=lat_f, lon=lon_f, description=None,
-        ai_accepted=bool(result.confidence and result.confidence >= 0.6),
+        ai_accepted=bool(result.accepted),
         client_ip=_client_ip(), hazard_category=result.hazard_category,
         hazard_type=result.hazard_type, location_name=location_name,
         authority_area=authority_area, detection_model=result.model,

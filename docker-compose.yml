@@ -1,0 +1,159 @@
+# docker-compose.yml
+# ------------------
+# Phase 5 development stack: Flask backend + road-damage ML service.
+#
+#   Browser --> host :5000 --> backend (Flask) --> http://ml:8000 (FastAPI ML)
+#
+# The browser talks ONLY to Flask. Port 8000 is NOT published, so the ML
+# service is unreachable from the host/browser by design; Flask is its only
+# client.
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#   open http://localhost:5000
+#   docker compose ps
+#
+#   DANGER: `docker compose down -v` DELETES the `data` named volume, which
+#   contains the SQLite database. Everything in it is destroyed. Use plain
+#   `docker compose down` to stop the stack without losing data.
+#
+# ---------------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------------
+# No secret is baked into either image: .dockerignore excludes .env from both
+# build contexts, so no key ever reaches a layer. Values below come from
+# Compose's variable substitution, which reads the developer's gitignored .env
+# at COMPOSE time, not inside the container.
+#
+# Anything left unset falls back to a development-safe default. Compose warns
+# ("variable is not set") but starts.
+#
+# EMAIL_TEST_MODE is hard-pinned to true here on purpose. The host .env has
+# EMAIL_TEST_MODE=false plus a live RESEND_API_KEY, and inheriting that would
+# mean approving a report inside the container SENDS REAL EMAIL. The stack is a
+# development stack; it must never mail anyone. Override it explicitly if you
+# ever need a live-send test.
+
+services:
+  ml:
+    build:
+      # Phase 3 Dockerfile, UNCHANGED. The backend never enters this image.
+      context: .
+      dockerfile: ml/Dockerfile
+    image: smart-surround-ml:1.0.0
+    # No `ports:` on purpose -- the ML service is reachable only on the
+    # internal Compose network as http://ml:8000.
+    expose:
+      - "8000"
+    environment:
+      # Mirrors ml/Dockerfile's ENV. ROAD_DAMAGE_ACCEPT_THRESHOLD is
+      # deliberately NOT set: the approved 0.50 threshold lives in
+      # detector.py's own default, and overriding it here would risk the
+      # container drifting from the host. detection threshold stays 0.35.
+      ROAD_DAMAGE_MODEL_PATH: /app/models/road_damage_yolov8s.pt
+    healthcheck:
+      # /healthz is served by ml/server.py's FastAPI app and only becomes
+      # healthy AFTER the model is resident (the weights load in the lifespan
+      # startup hook). So a green ml means the backend's first /predict cannot
+      # lose a cold-start race.
+      #
+      # python:3.13-slim has no curl and no wget, so the probe uses the stdlib.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).status == 200 else 1)"
+      interval: 10s
+      timeout: 6s
+      # Generous: first boot loads 89 MB of weights and pays torch import cost.
+      start_period: 90s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: smart-surround-backend:1.0.0
+    depends_on:
+      ml:
+        # Hard ordering: no remote->local fallback exists, so Flask must not
+        # accept traffic before the model is loaded or the first citizen
+        # upload fails with RemoteServiceError.
+        condition: service_healthy
+    ports:
+      # The ONLY host-published port in the stack.
+      - "5000:5000"
+    environment:
+      # --- Phase 4 seam: route inference to the ML service -----------------
+      # http://ml:8000 is Compose service DNS. It must NOT be
+      # http://localhost:8000: inside a container "localhost" is the
+      # container's own loopback, where nothing is listening.
+      ROAD_DAMAGE_INFERENCE_MODE: remote
+      ROAD_DAMAGE_ML_URL: http://ml:8000
+      ROAD_DAMAGE_ML_TIMEOUT: "15.0"
+      ROAD_DAMAGE_ML_RETRIES: "1"
+
+      # --- SQLite on a named volume ---------------------------------------
+      # The database lives on the volume, NOT in the image layer, so `down` +
+      # `up` keeps every detection, cluster, authority and lifecycle value.
+      # The host smartsurround.db is NOT copied in: the container starts empty
+      # and is its own dataset.
+      SMARTSURROUND_DB_PATH: /data/smartsurround.db
+
+      # --- App configuration (substituted from the developer's .env) ------
+      # ${VAR:-default} means "use the shell/.env value, else this default".
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
+      ADMIN_PIN: ${ADMIN_PIN:-}
+      AUTH_DISABLED: ${AUTH_DISABLED:-1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5000,http://127.0.0.1:5000}
+      MAX_IMAGE_BYTES: ${MAX_IMAGE_BYTES:-10485760}
+
+      # --- Email: development-safe ----------------------------------------
+      # Pinned, not substituted. See the header note.
+      EMAIL_TEST_MODE: "true"
+      EMAIL_DRIVER: ${EMAIL_DRIVER:-resend}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
+
+      # --- Letters / geocoding ---------------------------------------------
+      AUTHORITY_NAME: ${AUTHORITY_NAME:-Public Works Department}
+      AUTHORITY_ADDRESS: ${AUTHORITY_ADDRESS:-[Authority address here]}
+      SENDER_NAME: ${SENDER_NAME:-SmartSurround Monitoring System}
+      SENDER_CONTACT: ${SENDER_CONTACT:-[Your contact email]}
+      GEOCODE_URL: ${GEOCODE_URL:-https://nominatim.openstreetmap.org/reverse}
+      GEOCODE_TIMEOUT: ${GEOCODE_TIMEOUT:-5}
+
+      # --- Corroboration / clustering (behavior unchanged) ------------------
+      CORROBORATION_FINE_DECIMALS: ${CORROBORATION_FINE_DECIMALS:-3}
+      CORROBORATION_COARSE_DECIMALS: ${CORROBORATION_COARSE_DECIMALS:-2}
+      DRAFT_TTL_HOURS: ${DRAFT_TTL_HOURS:-24}
+    volumes:
+      # Named volume for SQLite. Deliberately NOT a bind mount: a SQLite file
+      # bind-mounted across a Windows host boundary puts the database and its
+      # rollback journal on different filesystems, which causes locking errors.
+      - data:/data
+      # Persistent dev data only. The SOURCE TREE is NOT mounted, so the host
+      # .env can never appear at /app/.env and leak into the container, and no
+      # host __pycache__ or host code shadows the image's copy.
+      - ./uploads:/app/uploads
+      - ./letters:/app/letters
+    healthcheck:
+      # GET / renders the citizen upload form (app.py:412-414) and is not
+      # behind @require_auth. Importing this module already ran db.init_db(),
+      # so a 200 also proves the volume is writable and the schema is current.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/', timeout=5).status == 200 else 1)"
+      interval: 15s
+      timeout: 6s
+      start_period: 30s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  data:
+    name: smartsurround_data

@@ -1,0 +1,115 @@
+# requirements-ml.txt
+# ------------------------
+# Explicit, fully-pinned runtime closure for the standalone road-damage ML
+# inference service (ml/server.py). Resolved from the verified local detector
+# environment (Python 3.13.3) so container output is numerically identical to
+# the Phase 1 golden baseline.
+#
+# There is NO runtime pip install in this service. See "pi-heif" below.
+#
+# ---------------------------------------------------------------------------
+# pi-heif: DELIBERATELY NOT INSTALLED -- read before "fixing" this
+# ---------------------------------------------------------------------------
+# ultralytics 8.4.133 monkey-patches PIL.Image.open (ultralytics/utils/patches.py
+# :78-88) so that ANY decode failure triggers check_requirements("pi-heif")
+# followed by `from pi_heif import register_heif_opener`. With pi-heif absent
+# and autoinstall enabled, that LIVE-PIP-INSTALLS pi-heif into the running
+# environment at inference time. Phase 1 observed exactly that: it installed
+# pi-heif and silently upgraded Pillow 10.4.0 -> 12.3.0, breaking the pin in
+# the app's requirements.txt.
+#
+# Installing pi-heif is NOT a fix, because EVERY published pi-heif release
+# (checked: 1.0.0, 1.1.1, 1.3.0, 1.4.0) declares `pillow>=11.1.0`, which is
+# incompatible with the verified pillow==10.4.0. Adding it would trade a
+# runtime mutation for a silent major-version change to a pinned dependency.
+#
+# pi-heif is also NOT NEEDED. It only backs the HEIC/HEIF branch of a Pillow
+# code path that inference never takes: detector._raw_predict() calls
+# model.predict(source=<path>), which decodes via OpenCV (Phase 1 evidence:
+# the corrupt uploads produced `cv::PngDecoder` errors, not Pillow errors).
+# The guard below makes the absence safe and explicit instead of implicit.
+#
+# Guards applied (both, in the Dockerfile ENV and again in server.py):
+#   ULTRALYTICS_SKIP_REQUIREMENTS_CHECKS=1 -> check_requirements() returns
+#       immediately, before inspecting or installing anything.
+#   YOLO_AUTOINSTALL=false                  -> belt-and-braces; gates the
+#       `if install and AUTOINSTALL` branch in check_requirements().
+# Result: no network access and no environment mutation at inference time.
+# Residual (documented, not reachable from /predict): if some future code path
+# calls PIL.Image.open on an undecodable file, it raises ModuleNotFoundError
+# instead of UnidentifiedImageError. Adopting pi-heif later is a deliberate,
+# separately-tested change that must also accept the Pillow bump.
+# ---------------------------------------------------------------------------
+
+# CPU-only PyTorch. Without this, `torch==2.14.0` from PyPI pulls 5 CUDA
+# packages on Linux (nvidia-cudnn-cu13, nvidia-cusparselt-cu13, nvidia-nccl-cu13,
+# nvidia-nvshmem-cu13, triton) -- multiple GB for a CPU-only service.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.0+cpu
+torchvision==0.29.0+cpu
+
+# Detector (imported directly; detector.py is NOT modified by this service)
+ultralytics==8.4.133
+ultralytics-platform==0.1.40
+ultralytics-thop==2.1.6
+# opencv-python, NOT opencv-python-headless, and the version is identical to the
+# verified dev environment (5.0.0.93) so the image is as faithful as possible
+# to the golden baseline.
+#
+# Why not the headless wheel? `ultralytics` declares `opencv-python>=4.6.0` as a
+# hard runtime dependency, and BOTH distributions install into the same top-level
+# `cv2/` directory rather than being mutually exclusive. Installing
+# opencv-python-headless does not remove opencv-python: pip installed both on the
+# first attempt and the GUI build's native module still shadowed it, leaving
+# `ImportError: libxcb.so.1: cannot open shared object file` (observed on build
+# #8, twice). The headless swap also leaves `pip check` reporting ultralytics'
+# dependency unsatisfied.
+#
+# The fix is therefore to keep the GUI build and satisfy its shared-library
+# needs in the image (see the apt layer in ml/Dockerfile) rather than fight the
+# package metadata.
+opencv-python==5.0.0.93
+pillow==10.4.0
+numpy==2.5.3
+
+# HTTP service
+fastapi==0.141.1
+uvicorn==0.54.0
+python-multipart==0.0.32
+starlette==1.7.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+annotated-types==0.8.0
+annotated-doc==0.0.5
+typing-inspection==0.4.4
+anyio==4.15.1
+click==8.5.0
+h11==0.16.0
+idna==3.19
+
+# Transitive closure of the above, pinned for reproducibility.
+# Platform-specific pins from the Windows dev env are intentionally omitted
+# (polars-runtime-32, nvidia-ml-py) so the resolver picks the Linux variants.
+matplotlib==3.11.2
+contourpy==1.4.0
+cycler==0.12.1
+fonttools==4.65.0
+kiwisolver==1.5.1
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+six==1.17.0
+polars==1.44.2
+sympy==1.14.0
+mpmath==1.3.0
+networkx==3.6.1
+filelock==3.32.6
+fsspec==2026.7.0
+packaging==26.3
+psutil==7.2.2
+PyYAML==6.0.3
+requests==2.34.2
+certifi==2026.7.22
+charset-normalizer==3.5.1
+urllib3==2.7.0
+typing_extensions==4.16.0
+setuptools==84.0.0

@@ -1,0 +1,67 @@
+# requirements-backend.txt
+# -------------------------
+# Runtime closure for the SmartSurround Flask backend running in REMOTE
+# inference mode (ROAD_DAMAGE_INFERENCE_MODE=remote), as used by the Phase 5
+# docker-compose stack.
+#
+# WHY THIS FILE EXISTS INSTEAD OF requirements.txt
+# ------------------------------------------------
+# requirements.txt is the host/DEV closure and pins ultralytics, which pulls
+# torch + torchvision + OpenCV. Inside Compose the backend NEVER imports them:
+#
+#   hazard.py imports `detector` only when INFERENCE_MODE == "local", and
+#   detector.py is the only module in the Flask import graph that touches
+#   ultralytics/torch/cv2. In remote mode the transport is plain `requests`.
+#
+# Verified by static import scan of the Flask import graph
+# (app.py -> db, hazard, hazard_types, letter_generator, corroboration,
+#  authority_routing, email_driver, geocode, cluster_service):
+#   flask, dotenv, requests, reportlab, PIL, resend  -- nothing heavier.
+#
+# Installing ultralytics here would drag ~2 GB of CUDA torch wheels into a
+# container that can never call them, which matters because this machine has
+# only ~4.8 GB free on C: and the ML image is already 2.61 GB.
+#
+# This file is INTENTIONALLY NOT a replacement for requirements.txt. The host
+# dev environment still uses requirements.txt so that local-mode inference and
+# the Phase 1 golden baseline are unchanged. Model logic, detector.py and
+# ml/requirements-ml.txt are untouched by this file.
+#
+# There is NO runtime pip install in the backend image, so no autoinstall /
+# dependency-mutation hazard exists here at all (see ml/requirements-ml.txt for
+# the ultralytics/pi-heif discussion that applies to the ML image only).
+
+# --- WSGI server -------------------------------------------------------------
+# One worker only. app.py holds session tokens, rate-limit counters and upload
+# tokens in module-level dicts (app.py:139-141), so a second worker would serve
+# a different in-memory view and randomly 401 valid sessions.
+gunicorn==23.0.0
+
+# --- Direct runtime dependencies (same pins as requirements.txt) -------------
+Flask==3.0.3
+reportlab==4.2.2          # letter PDF generation
+pillow==10.4.0           # letter/image raster work
+python-dotenv==1.2.3     # app.py load_dotenv()
+resend==2.46.0
+requests==2.34.2         # hazard.py remote ML transport
+
+# --- Transitive closure, pinned to the verified local environment ----------
+# Flask
+blinker==1.9.0
+click==8.5.0
+itsdangerous==2.2.0
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+Werkzeug==3.1.8
+
+# requests
+certifi==2026.7.22
+charset-normalizer==3.5.1
+idna==3.19
+urllib3==2.7.0
+
+# reportlab / resend
+chardet==7.6.0
+typing_extensions==4.16.0
+
+setuptools==84.0.0

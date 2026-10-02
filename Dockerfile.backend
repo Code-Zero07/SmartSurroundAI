@@ -1,0 +1,121 @@
+# Dockerfile.backend
+# ------------------
+# SmartSurround Flask backend, containerized for the Phase 5 docker-compose
+# development stack.
+#
+# Topology (see docker-compose.yml):
+#
+#   Browser ---> host :5000 ---> backend (Flask, this file) ---> http://ml:8000
+#                                                            (FastAPI, ml/Dockerfile)
+#
+# The browser NEVER talks to the ML service. Only Flask does.
+#
+# Build:  docker compose build backend
+#         (or: docker build -f Dockerfile.backend -t smart-surround-backend:1.0.0 .)
+#
+# ---------------------------------------------------------------------------
+# No ML stack here, on purpose
+# ---------------------------------------------------------------------------
+# This image installs requirements-backend.txt: Flask, reportlab, Pillow,
+# python-dotenv, resend, requests and gunicorn. Nothing else.
+#
+# In REMOTE inference mode hazard.py never imports `detector`, and detector.py
+# is the only module in the Flask import graph that touches ultralytics /
+# torch / cv2. So this image carries neither the ML dependencies nor the 89 MB
+# of weights -- ml/Dockerfile owns that, unchanged.
+#
+# Consequence worth knowing: if ROAD_DAMAGE_INFERENCE_MODE is ever set to
+# "local" in this container, the import of `detector` fails. That is not a bug
+# in this file -- local mode is the host/dev path (requirements.txt), and the
+# container is remote-only by design. There is deliberately NO remote->local
+# fallback.
+#
+# ---------------------------------------------------------------------------
+# Python 3.13.3 -- same interpreter as the ML image and the verified host venv,
+# so both containers and the host resolve an identical wheel set.
+FROM python:3.13.3-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# Dependency layer first so app edits do not invalidate it.
+# --retries/--timeout: PyPI read timeouts are intermittent and fail the whole
+# build on a flaky link (observed once on the first attempt). Retrying is the
+# difference between a 30s hiccup and a failed container build.
+COPY requirements-backend.txt /app/requirements-backend.txt
+RUN python -m pip install --no-cache-dir \
+        --retries 5 --timeout 60 \
+        -r /app/requirements-backend.txt \
+    && python -m pip check
+
+# --- Flask import graph, copied verbatim ------------------------------------
+# Only the modules app.py actually imports. detector.py and models/ are
+# deliberately ABSENT (see above). .env, *.db, uploads/ and letters/ never
+# enter the build context at all (.dockerignore), so no host secret, host
+# database or host media can leak into this image.
+COPY app.py db.py hazard.py hazard_types.py /app/
+COPY letter_generator.py corroboration.py authority_routing.py /app/
+COPY email_driver.py geocode.py cluster_service.py /app/
+COPY templates/ /app/templates/
+COPY static/ /app/static/
+
+# ---------------------------------------------------------------------------
+# Runtime layout
+# ---------------------------------------------------------------------------
+#   /data             named volume -- the SQLite database lives here
+#   /app/uploads      bind mount ./uploads
+#   /app/letters      bind mount ./letters
+#
+# app.py/letter_generator.py create uploads/ and letters/ at import time, but
+# they are created BEFORE the bind mount is applied if the image has no such
+# directory, so create them here to keep ownership explicit.
+RUN mkdir -p /data /app/uploads /app/letters
+VOLUME ["/data"]
+
+# Non-root. UID 10002 is distinct from the ML image's 10001 so the two
+# containers never share a uid on the shared network/host.
+RUN useradd --create-home --uid 10002 backend \
+    && chown -R backend:backend /app /data
+
+ENV SMARTSURROUND_DB_PATH=/data/smartsurround.db
+
+# Remote inference defaults, matching docker-compose.yml. Repeated there so the
+# Compose file is the single place a developer edits them; these are just a safe
+# default if the image is run on its own.
+ENV ROAD_DAMAGE_INFERENCE_MODE=remote \
+    ROAD_DAMAGE_ML_URL=http://ml:8000 \
+    ROAD_DAMAGE_ML_TIMEOUT=15.0 \
+    ROAD_DAMAGE_ML_RETRIES=1
+
+USER backend
+
+EXPOSE 5000
+
+# ---------------------------------------------------------------------------
+# Gunicorn, exactly ONE worker, no reloader, no debug.
+# ---------------------------------------------------------------------------
+# `python app.py` is NOT used: app.py:820-821 calls app.run(debug=True), which
+# enables the Werkzeug reloader (a second process) and the interactive
+# debugger. Neither belongs in a container, so the module-level `app` object
+# (app.py:130) is served directly instead.
+#
+# --workers 1 is a HARD requirement, not a default: app.py:139-141 keeps
+# session tokens, rate-limit counters and upload tokens in module-level dicts.
+# A second worker serves a different in-memory view and randomly 401s valid
+# sessions. Do not raise this without reworking that state first.
+#
+# 0.0.0.0 is required for the container to be reachable through the published
+# host port. (app.py already binds 0.0.0.0 on its own dev path.)
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:5000", \
+     "--workers", "1", \
+     "--threads", "4", \
+     "--timeout", "120", \
+     "--graceful-timeout", "30", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
+     "app:app"]

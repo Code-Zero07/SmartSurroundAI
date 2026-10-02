@@ -1,0 +1,65 @@
+# .dockerignore
+# --------------
+# Keeps the build context small and hermetic for BOTH Dockerfiles in this repo
+# (ml/Dockerfile and Dockerfile.backend), which share the repository root as
+# their context. Without this the daemon receives the whole repo, including the
+# ~3 GB venv/, the uploads/ corpus and .git/ -- gigabytes neither image needs
+# nor should see.
+#
+# The ML service needs: detector.py, the model weights, ml/, and the Phase 1
+# golden fixture used by the parity check.
+# The backend needs: the Flask modules, templates/ and static/.
+#
+# Both are ~equal, so a single root .dockerignore is the right shape; a second
+# one would require moving sources into a subdirectory.
+
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.git/
+.gitignore
+.github/
+.opencode/
+skills/
+
+# Runtime state and test artifacts -- never part of an image
+uploads/
+letters/
+*.db
+*.db-journal
+*.log
+.env
+.env.*
+
+# ---------------------------------------------------------------------------
+# Flask application (Phase 5)
+# ---------------------------------------------------------------------------
+# Phase 3/4 excluded these because the Flask app was not yet containerized, and
+# `Dockerfile.backend` cannot COPY a file the context does not contain.
+#
+# They are now INCLUDED in the context so the backend image can be built. This
+# does NOT put them into the ML image: ml/Dockerfile COPYs only the files it
+# explicitly names (detector.py, models/, ml/, the golden fixture), so these
+# extra context entries are simply transferred and then discarded. The cost is
+# ~70 KB.
+#
+# `tests/` remains NOT excluded as a directory. Docker's .dockerignore cannot
+# re-include a file whose parent directory is excluded, so excluding `tests/`
+# would also drop the golden fixture ml/parity_check.py needs. Only the
+# throwaway Python artifacts are dropped instead.
+tests/__pycache__/
+# models/ stays in the context for the ML image; Dockerfile.backend never
+# COPYs it, so the 89 MB of weights never reach the backend image.
+
+# Documentation and container plumbing
+*.md
+Dockerfile
+docker-compose*.yml

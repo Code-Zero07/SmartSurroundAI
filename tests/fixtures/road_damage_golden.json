@@ -1,0 +1,1075 @@
+{
+  "_meta": {
+    "purpose": "Field-for-field characterization of the CURRENT detector.py behaviour, captured before the ML inference service is extracted into Docker. Regenerate with tests/fixtures/generate_road_damage_golden.py and review the diff.",
+    "assertion_policy": "Nothing here is normalized or corrected. db_reference is PROVENANCE ONLY and is never asserted against: those rows span two normalization eras (display class names in ids 1-12, slugs in ids 33-40) and predate the current thresholds.",
+    "corpus_note": "uploads/ is gitignored. This fixture is only reproducible on a machine holding the corpus; the per-case md5 lets a future corpus be matched byte-for-byte.",
+    "decode_notes": {
+      "corrupt_uploads_do_not_raise": "detector.analyze_road() does NOT raise on an undecodable image. OpenCV logs 'Image Read Error', ultralytics returns an empty result, and analyze_road() reports road_condition='normal' with confidence=null. app.py therefore takes the svc.validate()==False path: the citizen is told 'No valid hazard detected above the confidence threshold' (HTTP 200, valid:false) instead of the 422 'Detection failed' path behind hazard.ModelInferenceError. An unreadable photo is indistinguishable from a clean road. A future ML service MUST NOT reproduce this.",
+      "pi_heif_landmine": "ultralytics/utils/patches.py:78-88 monkey-patches PIL.Image.open so that ANY decode failure triggers check_requirements('pi-heif') and then `from pi_heif import register_heif_opener`. With pi-heif absent and YOLO_AUTOINSTALL unset, that live-pip-installs pi-heif into the running environment, which pulls pillow>=11.1.0 and upgrades the Pillow==10.4.0 pin. Offline or read-only, the original UnidentifiedImageError is replaced by ModuleNotFoundError('No module named pi_heif'). pi-heif is absent from requirements.txt. Any future container image must pin this explicitly rather than letting inference mutate its own environment."
+    },
+    "model": {
+      "path": "models/road_damage_yolov8s.pt",
+      "md5": "6d07e92cbc98284216e6621c427d58ac",
+      "bytes": 89569358
+    },
+    "thresholds": {
+      "ROAD_DAMAGE_CONF_THRESHOLD": 0.35,
+      "ROAD_DAMAGE_ACCEPT_THRESHOLD": 0.6,
+      "ROAD_DAMAGE_FALLBACK_THRESHOLD": 0.45,
+      "RAW_CONF_FLOOR": 0.05
+    },
+    "severity_map": {
+      "Potholes": "Critical",
+      "Alligator Crack": "Critical",
+      "Longitudinal Crack": "Warning",
+      "Transverse Crack": "Warning",
+      "Unclassified damage": "Warning"
+    },
+    "runtime": {
+      "python": "3.13.3",
+      "ultralytics": "8.4.133",
+      "torch": "2.14.0+cpu",
+      "cuda_available": false,
+      "device": "cpu"
+    }
+  },
+  "cases": [
+    {
+      "image": "uploads/cb6256f85682428682a293a6ab7cac64.jpg",
+      "md5": "83c62fe5dd68bcf27a651a5921bf72f3",
+      "bytes": 47008,
+      "size": [
+        387,
+        516
+      ],
+      "format": "JPEG",
+      "selection_note": "highest confidence on record",
+      "analyze_road": {
+        "road_condition": "damaged",
+        "damage_type": "Alligator Crack",
+        "confidence": 0.871,
+        "accepted": true,
+        "bbox": [
+          0.0,
+          6.7,
+          385.0,
+          516.0
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Alligator Crack",
+          "confidence": 0.871,
+          "severity": "Critical",
+          "box": [
+            0.0,
+            6.7,
+            385.0,
+            516.0
+          ],
+          "accepted": true
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 4,
+        "damage_class": "Alligator Crack",
+        "confidence": 0.871,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/4afd7fe02116464f9df0f6aefcea1898.jpg",
+      "md5": "d451b97e34be0487da04eececf03d8c1",
+      "bytes": 65200,
+      "size": [
+        640,
+        480
+      ],
+      "format": "JPEG",
+      "selection_note": "Potholes, high confidence",
+      "analyze_road": {
+        "road_condition": "damaged",
+        "damage_type": "Potholes",
+        "confidence": 0.813,
+        "accepted": true,
+        "bbox": [
+          400.7,
+          336.5,
+          515.4,
+          411.1
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Potholes",
+          "confidence": 0.813,
+          "severity": "Critical",
+          "box": [
+            400.7,
+            336.5,
+            515.4,
+            411.1
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.727,
+          "severity": "Critical",
+          "box": [
+            383.6,
+            293.2,
+            502.9,
+            332.6
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.713,
+          "severity": "Critical",
+          "box": [
+            245.6,
+            294.5,
+            334.1,
+            340.7
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.665,
+          "severity": "Critical",
+          "box": [
+            311.0,
+            271.1,
+            365.9,
+            304.0
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.636,
+          "severity": "Critical",
+          "box": [
+            389.0,
+            260.1,
+            422.9,
+            285.5
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.586,
+          "severity": "Critical",
+          "box": [
+            246.7,
+            239.4,
+            286.3,
+            264.5
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 7,
+        "damage_class": "Potholes",
+        "confidence": 0.813,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/81e2bfc5b98b43ec8c48c23a619e69d2.png",
+      "md5": "c09d47b41d41d90a79bb63f4c19fa6c5",
+      "bytes": 278076,
+      "size": [
+        467,
+        317
+      ],
+      "format": "PNG",
+      "selection_note": "the 15-copy duplicate group; rows 30/31 for it were admin-rejected",
+      "analyze_road": {
+        "road_condition": "damaged",
+        "damage_type": "Longitudinal Crack",
+        "confidence": 0.823,
+        "accepted": true,
+        "bbox": [
+          293.9,
+          178.0,
+          360.6,
+          255.1
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Longitudinal Crack",
+          "confidence": 0.823,
+          "severity": "Warning",
+          "box": [
+            293.9,
+            178.0,
+            360.6,
+            255.1
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.589,
+          "severity": "Critical",
+          "box": [
+            0.7,
+            272.1,
+            112.2,
+            316.8
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Warning",
+      "db_reference": {
+        "detection_id": 12,
+        "damage_class": "Longitudinal Crack",
+        "confidence": 0.823,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/243a821989c24074b7ab91cc640f8458.jpg",
+      "md5": "76ca05e64b2cfa180d6c6fedb4234064",
+      "bytes": 62927,
+      "size": [
+        640,
+        480
+      ],
+      "format": "JPEG",
+      "selection_note": "Potholes, mid confidence",
+      "analyze_road": {
+        "road_condition": "damaged",
+        "damage_type": "Potholes",
+        "confidence": 0.733,
+        "accepted": true,
+        "bbox": [
+          383.1,
+          332.9,
+          510.8,
+          410.7
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Potholes",
+          "confidence": 0.733,
+          "severity": "Critical",
+          "box": [
+            383.1,
+            332.9,
+            510.8,
+            410.7
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.626,
+          "severity": "Critical",
+          "box": [
+            280.7,
+            260.9,
+            341.2,
+            292.8
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.578,
+          "severity": "Critical",
+          "box": [
+            368.3,
+            246.3,
+            404.8,
+            269.4
+          ],
+          "accepted": false
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.523,
+          "severity": "Critical",
+          "box": [
+            203.4,
+            224.0,
+            249.5,
+            246.8
+          ],
+          "accepted": false
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.506,
+          "severity": "Critical",
+          "box": [
+            358.4,
+            281.0,
+            495.3,
+            326.6
+          ],
+          "accepted": false
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.505,
+          "severity": "Critical",
+          "box": [
+            212.3,
+            285.6,
+            305.5,
+            332.4
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 5,
+        "damage_class": "Potholes",
+        "confidence": 0.733,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/06eb20625cdf4987b1094ca7da6cec17.jpg",
+      "md5": "1d79bd451f0ff8e51533ea1607e20885",
+      "bytes": 68238,
+      "size": [
+        640,
+        480
+      ],
+      "format": "JPEG",
+      "selection_note": "Potholes, lower confidence",
+      "analyze_road": {
+        "road_condition": "damaged",
+        "damage_type": "Potholes",
+        "confidence": 0.716,
+        "accepted": true,
+        "bbox": [
+          360.1,
+          331.2,
+          482.9,
+          406.5
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Potholes",
+          "confidence": 0.716,
+          "severity": "Critical",
+          "box": [
+            360.1,
+            331.2,
+            482.9,
+            406.5
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.691,
+          "severity": "Critical",
+          "box": [
+            276.3,
+            264.2,
+            328.3,
+            291.2
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.628,
+          "severity": "Critical",
+          "box": [
+            353.3,
+            251.6,
+            387.2,
+            274.4
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.607,
+          "severity": "Critical",
+          "box": [
+            209.5,
+            284.3,
+            294.1,
+            326.4
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.575,
+          "severity": "Critical",
+          "box": [
+            207.2,
+            226.3,
+            250.7,
+            247.5
+          ],
+          "accepted": false
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.545,
+          "severity": "Critical",
+          "box": [
+            348.3,
+            284.6,
+            467.3,
+            324.0
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 6,
+        "damage_class": "Potholes",
+        "confidence": 0.716,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/03574fd4f48a4d389759b5ae03450a51.png",
+      "md5": "94ba2de00d3ec7e0d25f4c92645c78ef",
+      "bytes": 287911,
+      "size": [
+        605,
+        341
+      ],
+      "format": "PNG",
+      "selection_note": "boundary: 0.609 vs ACCEPT_THRESHOLD 0.60",
+      "analyze_road": {
+        "road_condition": "damaged",
+        "damage_type": "Alligator Crack",
+        "confidence": 0.609,
+        "accepted": true,
+        "bbox": [
+          183.5,
+          146.3,
+          375.1,
+          259.6
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Alligator Crack",
+          "confidence": 0.609,
+          "severity": "Critical",
+          "box": [
+            183.5,
+            146.3,
+            375.1,
+            259.6
+          ],
+          "accepted": true
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 11,
+        "damage_class": "Alligator Crack",
+        "confidence": 0.609,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/2af17ada35c547e3980c21264e8d6c1a.jpg",
+      "md5": "3bbd8fb4482f32bc0cb271fafdecad48",
+      "bytes": 38420,
+      "size": [
+        371,
+        242
+      ],
+      "format": "JPEG",
+      "selection_note": "slug-era row; expect the display class name back",
+      "analyze_road": {
+        "road_condition": "damaged",
+        "damage_type": "Alligator Crack",
+        "confidence": 0.634,
+        "accepted": true,
+        "bbox": [
+          0.7,
+          28.5,
+          370.3,
+          233.5
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Alligator Crack",
+          "confidence": 0.634,
+          "severity": "Critical",
+          "box": [
+            0.7,
+            28.5,
+            370.3,
+            233.5
+          ],
+          "accepted": true
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 37,
+        "damage_class": "alligator_crack",
+        "confidence": 0.634,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/3d59936fc8df449bad634195236d143a.png",
+      "md5": "0344761c30e2c476710d95f02ce192a5",
+      "bytes": 1237900,
+      "size": [
+        768,
+        632
+      ],
+      "format": "PNG",
+      "selection_note": "unclassified with HIGH combined evidence, ai_accepted=0",
+      "analyze_road": {
+        "road_condition": "damaged_unclassified",
+        "damage_type": null,
+        "confidence": 0.673,
+        "accepted": false,
+        "bbox": [
+          0.0,
+          230.0,
+          423.6,
+          610.2
+        ]
+      },
+      "run_detection": [],
+      "severity_for_damage_type": null,
+      "db_reference": {
+        "detection_id": 3,
+        "damage_class": "Unclassified damage",
+        "confidence": 0.673,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/4f4e0055af194057bcb91bd0e4eebd69.jpg",
+      "md5": "5affcea3439eace8dd65e2a5c3541b0d",
+      "bytes": 241107,
+      "size": [
+        266,
+        372
+      ],
+      "format": "PNG",
+      "selection_note": "slug-era row; live evidence that app.py:437 mislabels severity",
+      "analyze_road": {
+        "road_condition": "damaged",
+        "damage_type": "Potholes",
+        "confidence": 0.673,
+        "accepted": true,
+        "bbox": [
+          98.2,
+          199.4,
+          136.1,
+          216.4
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Potholes",
+          "confidence": 0.673,
+          "severity": "Critical",
+          "box": [
+            98.2,
+            199.4,
+            136.1,
+            216.4
+          ],
+          "accepted": true
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.509,
+          "severity": "Critical",
+          "box": [
+            5.0,
+            168.7,
+            77.9,
+            213.3
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 40,
+        "damage_class": "pothole",
+        "confidence": 0.673,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/b97653478136489dbf8e503e01213422.jpg",
+      "md5": "e05adf6efc74e3b6f79ce3db9e41fb23",
+      "bytes": 54566,
+      "size": [
+        338,
+        488
+      ],
+      "format": "JPEG",
+      "selection_note": "unclassified, near the fallback edge",
+      "analyze_road": {
+        "road_condition": "damaged_unclassified",
+        "damage_type": null,
+        "confidence": 0.596,
+        "accepted": false,
+        "bbox": [
+          171.1,
+          126.7,
+          205.5,
+          165.6
+        ]
+      },
+      "run_detection": [],
+      "severity_for_damage_type": null,
+      "db_reference": {
+        "detection_id": 2,
+        "damage_class": "Unclassified damage",
+        "confidence": 0.596,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/4bf2f409c6c449129dfeb91324c4f998.webp",
+      "md5": "f3e3e4a1e34d098ead9b75cca962abbe",
+      "bytes": 163772,
+      "size": [
+        1200,
+        675
+      ],
+      "format": "WEBP",
+      "selection_note": "the only WEBP; rows 14/15 for it were admin-rejected",
+      "analyze_road": {
+        "road_condition": "damaged_unclassified",
+        "damage_type": null,
+        "confidence": 0.481,
+        "accepted": false,
+        "bbox": [
+          244.9,
+          297.3,
+          524.4,
+          666.4
+        ]
+      },
+      "run_detection": [],
+      "severity_for_damage_type": null,
+      "db_reference": {
+        "detection_id": 1,
+        "damage_class": "Unclassified damage",
+        "confidence": 0.481,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/6b6655601f814ad5b7163a9312aa3e0c.jpg",
+      "md5": "237eef9e1de7741f664c42032c0662a2",
+      "bytes": 66156,
+      "size": [
+        640,
+        480
+      ],
+      "format": "JPEG",
+      "selection_note": "uncertain band",
+      "analyze_road": {
+        "road_condition": "uncertain",
+        "damage_type": "Potholes",
+        "confidence": 0.514,
+        "accepted": false,
+        "bbox": [
+          335.0,
+          169.8,
+          379.3,
+          191.9
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Potholes",
+          "confidence": 0.514,
+          "severity": "Critical",
+          "box": [
+            335.0,
+            169.8,
+            379.3,
+            191.9
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 8,
+        "damage_class": "Potholes",
+        "confidence": 0.514,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/21000c23d7f84d2cb4edf6517b83cc4c.png",
+      "md5": "399622efec831156f79c6c0e9293a2be",
+      "bytes": 421627,
+      "size": [
+        542,
+        432
+      ],
+      "format": "PNG",
+      "selection_note": "uncertain band, non-640 source resolution",
+      "analyze_road": {
+        "road_condition": "uncertain",
+        "damage_type": "Alligator Crack",
+        "confidence": 0.503,
+        "accepted": false,
+        "bbox": [
+          245.8,
+          304.0,
+          506.7,
+          427.9
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Alligator Crack",
+          "confidence": 0.503,
+          "severity": "Critical",
+          "box": [
+            245.8,
+            304.0,
+            506.7,
+            427.9
+          ],
+          "accepted": false
+        },
+        {
+          "class_name": "Potholes",
+          "confidence": 0.383,
+          "severity": "Critical",
+          "box": [
+            10.9,
+            251.5,
+            272.4,
+            380.0
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 10,
+        "damage_class": "Alligator Crack",
+        "confidence": 0.503,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/3d8abdb12dcf41fbb4e3500e59a97517.jpg",
+      "md5": "79537fb099577f22368e72fb574f52a4",
+      "bytes": 70437,
+      "size": [
+        640,
+        480
+      ],
+      "format": "JPEG",
+      "selection_note": "uncertain band, low end",
+      "analyze_road": {
+        "road_condition": "uncertain",
+        "damage_type": "Potholes",
+        "confidence": 0.393,
+        "accepted": false,
+        "bbox": [
+          168.2,
+          277.7,
+          216.1,
+          301.9
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Potholes",
+          "confidence": 0.393,
+          "severity": "Critical",
+          "box": [
+            168.2,
+            277.7,
+            216.1,
+            301.9
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 9,
+        "damage_class": "Potholes",
+        "confidence": 0.393,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/07b261f8b9214131bafd8ad297a0695c.jpg",
+      "md5": "b0bf309ec0f9aa328c08596528ccdbaf",
+      "bytes": 60516,
+      "size": [
+        640,
+        480
+      ],
+      "format": "JPEG",
+      "selection_note": "lowest confidence on record; 0.374 vs CONFIDENCE_THRESHOLD 0.35",
+      "analyze_road": {
+        "road_condition": "uncertain",
+        "damage_type": "Potholes",
+        "confidence": 0.374,
+        "accepted": false,
+        "bbox": [
+          223.3,
+          356.6,
+          319.9,
+          409.8
+        ]
+      },
+      "run_detection": [
+        {
+          "class_name": "Potholes",
+          "confidence": 0.374,
+          "severity": "Critical",
+          "box": [
+            223.3,
+            356.6,
+            319.9,
+            409.8
+          ],
+          "accepted": false
+        }
+      ],
+      "severity_for_damage_type": "Critical",
+      "db_reference": {
+        "detection_id": 38,
+        "damage_class": "pothole",
+        "confidence": 0.374,
+        "source": "smartsurround.db detections",
+        "note": "provenance only, never asserted"
+      }
+    },
+    {
+      "image": "uploads/e0b907f4fbd04f1b8c0cef71e168ab15.png",
+      "md5": "224287226ea9f486b289d8e935dd6bd1",
+      "bytes": 441253,
+      "size": [
+        570,
+        428
+      ],
+      "format": "PNG",
+      "selection_note": "never inferred; expect 'normal'",
+      "analyze_road": {
+        "road_condition": "normal",
+        "damage_type": null,
+        "confidence": null,
+        "accepted": false,
+        "bbox": null
+      },
+      "run_detection": [],
+      "severity_for_damage_type": null,
+      "db_reference": null
+    },
+    {
+      "image": "uploads/9f7db23927274a558c28be367dc90693.png",
+      "md5": "df04aece70ada235fc522d2d7af19d2f",
+      "bytes": 631049,
+      "size": [
+        642,
+        427
+      ],
+      "format": "PNG",
+      "selection_note": "never inferred; largest selected file (631 KB)",
+      "analyze_road": {
+        "road_condition": "normal",
+        "damage_type": null,
+        "confidence": null,
+        "accepted": false,
+        "bbox": null
+      },
+      "run_detection": [],
+      "severity_for_damage_type": null,
+      "db_reference": null
+    },
+    {
+      "image": "uploads/74a7feae63584b5599932583291fcfe6.png",
+      "md5": "631d62ed30a8eb1f522ee99f6e76f4a1",
+      "bytes": 397655,
+      "size": [
+        642,
+        427
+      ],
+      "format": "PNG",
+      "selection_note": "never inferred; expect 'normal'",
+      "analyze_road": {
+        "road_condition": "normal",
+        "damage_type": null,
+        "confidence": null,
+        "accepted": false,
+        "bbox": null
+      },
+      "run_detection": [],
+      "severity_for_damage_type": null,
+      "db_reference": null
+    },
+    {
+      "image": "uploads/0ec73e070ecc4e0788af3dd0494f3ddb.jpg",
+      "md5": "316adecffb22d49ba61f3516c9d403d0",
+      "bytes": 44140,
+      "size": [
+        640,
+        480
+      ],
+      "format": "JPEG",
+      "selection_note": "never inferred; expect 'normal'",
+      "analyze_road": {
+        "road_condition": "normal",
+        "damage_type": null,
+        "confidence": null,
+        "accepted": false,
+        "bbox": null
+      },
+      "run_detection": [],
+      "severity_for_damage_type": null,
+      "db_reference": null
+    },
+    {
+      "image": "uploads/a1da6fdcf56d448eb4dc6cdd7d246b77.jpg",
+      "md5": "cd98406f4c255133882832ef6db72b64",
+      "bytes": 85487,
+      "size": [
+        640,
+        480
+      ],
+      "format": "JPEG",
+      "selection_note": "never inferred; expect 'normal'",
+      "analyze_road": {
+        "road_condition": "normal",
+        "damage_type": null,
+        "confidence": null,
+        "accepted": false,
+        "bbox": null
+      },
+      "run_detection": [],
+      "severity_for_damage_type": null,
+      "db_reference": null
+    }
+  ],
+  "negative_cases": [
+    {
+      "image": "uploads/406ac58aa03941cd938fbeb44391dafd.png",
+      "md5": "e60901f212f9239ebdb3b74ed7a8fb9f",
+      "bytes": 134,
+      "size": null,
+      "format": null,
+      "decode_error": {
+        "ok": false,
+        "error": "UnidentifiedImageError",
+        "error_message": "cannot identify image file 'D:\\\\Program\\\\New folder\\\\smartsurround_backend02\\\\smartsurround_backend\\\\uploads\\\\406ac58aa03941cd938fbeb44391dafd.png'"
+      },
+      "selection_note": "corrupt upload; cannot be decoded",
+      "decode_under_ultralytics_patch": {
+        "ok": false,
+        "error": "ModuleNotFoundError",
+        "error_message": "No module named 'pi_heif'"
+      },
+      "analyze_road_result": {
+        "road_condition": "normal",
+        "damage_type": null,
+        "confidence": null,
+        "accepted": false,
+        "bbox": null
+      },
+      "raises": false
+    },
+    {
+      "image": "uploads/8d689315a36c46d7ab7442974eb37ddb.png",
+      "md5": "e60901f212f9239ebdb3b74ed7a8fb9f",
+      "bytes": 134,
+      "size": null,
+      "format": null,
+      "decode_error": {
+        "ok": false,
+        "error": "UnidentifiedImageError",
+        "error_message": "cannot identify image file 'D:\\\\Program\\\\New folder\\\\smartsurround_backend02\\\\smartsurround_backend\\\\uploads\\\\8d689315a36c46d7ab7442974eb37ddb.png'"
+      },
+      "selection_note": "corrupt upload; cannot be decoded",
+      "decode_under_ultralytics_patch": {
+        "ok": false,
+        "error": "ModuleNotFoundError",
+        "error_message": "No module named 'pi_heif'"
+      },
+      "analyze_road_result": {
+        "road_condition": "normal",
+        "damage_type": null,
+        "confidence": null,
+        "accepted": false,
+        "bbox": null
+      },
+      "raises": false
+    },
+    {
+      "image": "uploads/6248814500764287baa0ba284909618b.png",
+      "md5": "972f29cdfc2f761803e3d19e6a7eedc9",
+      "bytes": 18,
+      "size": null,
+      "format": null,
+      "decode_error": {
+        "ok": false,
+        "error": "UnidentifiedImageError",
+        "error_message": "cannot identify image file 'D:\\\\Program\\\\New folder\\\\smartsurround_backend02\\\\smartsurround_backend\\\\uploads\\\\6248814500764287baa0ba284909618b.png'"
+      },
+      "selection_note": "corrupt upload; cannot be decoded",
+      "decode_under_ultralytics_patch": {
+        "ok": false,
+        "error": "ModuleNotFoundError",
+        "error_message": "No module named 'pi_heif'"
+      },
+      "analyze_road_result": {
+        "road_condition": "normal",
+        "damage_type": null,
+        "confidence": null,
+        "accepted": false,
+        "bbox": null
+      },
+      "raises": false
+    }
+  ]
+}

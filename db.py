@@ -30,7 +30,22 @@ from datetime import datetime, timezone
 
 import hazard_types
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "smartsurround.db")
+# SQLite location. The default is UNCHANGED -- `smartsurround.db` next to this
+# file -- so every existing host run, test and the live database are completely
+# unaffected when SMARTSURROUND_DB_PATH is unset (which is the host case).
+#
+# SMARTSURROUND_DB_PATH exists ONLY so the Phase 5 Docker Compose stack can put
+# the database on a named volume at /data instead of inside the image layer
+# (and instead of bind-mounting a SQLite file across a Windows host boundary,
+# which has cross-device rollback-journal locking hazards). The container
+# database starts empty by design: the host smartsurround.db is authoritative
+# and is deliberately NOT copied into the image.
+#
+# It is read once at import, before db.init_db() runs at app.py import time.
+DB_PATH = os.environ.get(
+    "SMARTSURROUND_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "smartsurround.db"),
+)
 
 CLUSTER_ACTIVE_LIFECYCLES = (
     "pending_approval",

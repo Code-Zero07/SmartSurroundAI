@@ -13,6 +13,13 @@ DAMAGE_TYPE_SLUGS = {
     "Unclassified damage": "unclassified_damage",
 }
 
+# The detector's "unclassified damage" tier, named once here so callers do not
+# repeat either spelling. detector.analyze_road emits it with damage_type=null
+# and accepted=False by design: its confidence is combined evidence from
+# several weak classes rather than one named class's score.
+UNCLASSIFIED_LABEL = "Unclassified damage"
+UNCLASSIFIED_SLUG = DAMAGE_TYPE_SLUGS[UNCLASSIFIED_LABEL]
+
 
 def type_slug(damage_class):
     """Normalized hazard type for a detector class name, or None."""

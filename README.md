@@ -83,7 +83,7 @@ this in `detector.py`:
 
 ```bash
 export ROAD_DAMAGE_CONF_THRESHOLD=0.35       # minimum confidence to name a specific damage type
-export ROAD_DAMAGE_ACCEPT_THRESHOLD=0.60     # minimum confidence to mark a named type "reliable"
+export ROAD_DAMAGE_ACCEPT_THRESHOLD=0.50     # minimum confidence to mark a named type "reliable"
 export ROAD_DAMAGE_FALLBACK_THRESHOLD=0.45   # combined-evidence bar for the "unclassified damage" fallback
 ```
 
@@ -91,10 +91,12 @@ export ROAD_DAMAGE_FALLBACK_THRESHOLD=0.45   # combined-evidence bar for the "un
   combined:** not surfaced at all — treated as a normal road.
 - **A class between `CONF_THRESHOLD` and `ACCEPT_THRESHOLD`:** surfaced
   and queued, flagged **"AI: uncertain"** — a named type, shaky confidence.
-- **A class at/above `ACCEPT_THRESHOLD`:** flagged **"AI: confident"**.
-  This is the field (`ai_accepted` in the DB, `accepted` in
-  `detector.py`'s output) you'd eventually use to let Track B skip admin
-  review entirely for high-confidence detections.
+- **A class at/above `ACCEPT_THRESHOLD`:** flagged **"AI: confident"**. This is
+  also the Admin-queue gate: `DetectionService.eligible_for_queue()` requires
+  *both* the 35% detection floor *and* the detector's own `accepted` verdict, so
+  a named class below 50% is never queued. The unclassified tier is exempt from
+  that bar (its confidence is combined evidence, not one class's score) and keeps
+  flowing to admins as "AI: uncertain".
 - **No single class reaches `CONF_THRESHOLD`, but several different
   classes each fire weakly on the same photo:** the **"unclassified
   damage" fallback**. Shows up as `damage_class = "Unclassified damage"`,
@@ -246,6 +248,39 @@ never emails anyone (an authorized admin approves/sends per cluster). New knobs:
 | `ROAD_DAMAGE_MIN_CONF` | falls back to `ROAD_DAMAGE_CONF_THRESHOLD` (0.35) | Per-category validation threshold for `road_damage`; per-category thresholds are centralized in `hazard.py`. |
 | `DRAFT_TTL_HOURS` | `24` | Abandoned-draft sweep age — pre-submit drafts older than this are deleted automatically. |
 | `MAX_IMAGE_BYTES` | `10485760` (10 MiB) | Image size cap for `/api/detect`, `/api/report/preview`, and `/upload`. |
+
+### ML inference service — env surface (2026-09-29)
+
+`hazard.py` is the seam between Flask and the standalone ML service (the
+`smart-surround-ml` image built from `ml/Dockerfile`). The normalized
+`DetectionResult` contract and every detector decision are identical in both
+modes; only the transport differs.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ROAD_DAMAGE_INFERENCE_MODE` | `local` | `local` calls `detector.analyze_road()` in-process. `remote` POSTs the image to the ML service. `local` stays the default until the shadow parity run is signed off. |
+| `ROAD_DAMAGE_ML_URL` | `http://127.0.0.1:8000` | Base URL of the ML service (no trailing `/predict`). Use the compose service name, not `127.0.0.1`, when Flask itself is containerized. |
+| `ROAD_DAMAGE_ML_TIMEOUT` | `15` | Seconds per HTTP attempt. Observed warm inference is 0.12–0.19 s, so a timeout means the service is stuck, not slow. |
+| `ROAD_DAMAGE_ML_RETRIES` | `1` | Extra attempts after the first. Exactly one retry is applied to connection errors, timeouts, and HTTP 503 (`model_not_loaded`); every other non-2xx fails immediately. |
+
+**Dependency boundary.** In `remote` mode the Flask process does **not** import
+`detector`, so it carries no Ultralytics, PyTorch, OpenCV or YOLO weights. The
+service process owns all of them. Local mode is the only path that loads the
+model in Flask.
+
+**Failure behaviour.** If the service cannot be reached, times out, or answers
+unusable JSON after the retry, `hazard.RemoteServiceError` is raised and
+surfaces as the existing `ModelInferenceError`, so the upload fails with the
+usual "Detection failed" message. A service outage is never downgraded to a
+"nothing detected" verdict, and remote mode never silently falls back to local
+inference.
+
+**Verifying parity before flipping the default** (opt-in, not part of
+`unittest discover`):
+```
+python tests/fixtures/compare_remote_parity.py    # local vs remote, all 23 golden cases
+python ml/parity_check.py                          # remote service vs the golden fixture
+```
 
 **Marked legacy / no longer used** — the old auto-send corroboration knobs
 (thresholds + windows) were removed; clustering is generation/cluster-id based

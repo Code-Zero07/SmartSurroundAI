@@ -4,3 +4,7 @@ reportlab==4.2.2
 Pillow==10.4.0
 python-dotenv>=1.0
 resend>=2.43.0
+# Remote inference transport (ROAD_DAMAGE_INFERENCE_MODE=remote). Was already
+# present transitively via ultralytics+resend; pinned explicitly so the ML
+# service call path does not depend on someone else's dependency graph.
+requests==2.34.2
